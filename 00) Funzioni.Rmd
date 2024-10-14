@@ -1,0 +1,988 @@
+---
+title: "00) Funzioni"
+author: "Mattia Manna"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+    number_sections: true 
+header-includes:
+- \usepackage{bbold}
+- \usepackage{mdframed, xcolor}
+- \mdfsetup{frametitlealignment=\center}
+- \usepackage{graphicx}
+---
+
+
+\pagenumbering{Roman}
+\renewcommand*\contentsname{Indice}
+\tableofcontents
+
+
+\newpage
+\pagenumbering{arabic}
+
+```{r include=FALSE}
+rm(list = ls(all.names = TRUE))
+```
+
+
+
+```{r libraries, include=FALSE}
+library(edgeR)
+```
+
+
+Script che contiene tutte le funzioni utilizzate.       
+Vengono create queste funzioni per semplificare i passaggi successi e rendere la pipeline più efficace e comprensibile.    
+
+
+# Funzione per il file 01
+
+## distinct_patients, funzione di importazione
+
+Si definisca una funzione per estrarre dai dataset:   
+\begin{itemize}
+  \item tep.expr.filtered
+  \item tep.expr
+\end{itemize}
+
+solo i pazienti che hanno un determinato tipo di cancro.    
+
+
+
+
+```{r distinct_patients}
+distinct_patients <- function(df,cancer_type){
+  
+  # Estrarre i nomi dei pazienti (es GSM1662534) con il tipo di cancro specificato
+  specific.patients <- rownames(patients[patients$cancer.type.ch1==cancer_type,])
+  
+  # Filtrare il dataset in input prendendo solo 
+  output <- df[,colnames(df) %in% specific.patients]
+  
+  # Filtrare le righe dove la somma per riga non è uguale a zero, scartare geni inutili.
+  #output <- output[rowSums(output != 0) > 0, ]
+  return(output)
+}
+```
+
+
+
+
+\newpage
+
+# 02 Identificazione DEGs
+
+## **find_DEGs**, pipeline per identificazione DEGs con edgeR
+
+La funzione **find_DEGs** prende in input:
+\begin{itemize}
+  \item \textbf{counts}: dataset contenente il livello trascrizione dei geni.
+        Generalmente composto da due dataset uniti, ad esempio gbm + sani. 
+  \item \textbf{group} 
+  \item \textbf{contrasto}: per specificare il caso che si vuole studiare.
+\end{itemize}
+
+
+La funzione **find_DEGs** restistuisce in output:
+\begin{itemize}
+  \item La tep.expr.filtr normalizzata tramite metodo TMM
+  \item Le stime 
+  \item Un oggetto contenente tutte le metriche
+\end{itemize}
+
+\newpage
+Il funzionamento della funzione in sintesi:
+
+\begin{enumerate}
+  \item Crea un \textbf{oggetto DGEList} prendendo in input \textit{counts} e \textit{group}
+  \item \textbf{Normalizza} tramite il metodo \textbf{TMM}
+  \item Definisce la \textbf{design matrix}
+  \item Calcola le stime 
+  \item Calcola le metriche come logCPM, logFC, FDR, PValue...
+  \item Restituitsce le metriche, i valori di espressione dei geni normalizzati, le stime
+\end{enumerate}
+
+
+La parte fondamentale di questa funzione sono le **metriche**, una volta che si hanno le metriche basta fissare
+delle threshold per identificare i DEGs.    
+
+
+```{r}
+find_DEGs <- function(counts,group,contrasto){
+  
+  # Creazione dell'oggetto DGEList
+  y <- DGEList(counts = counts, group = group)
+  
+  
+  # Normalizzazione
+  y <- calcNormFactors(y, method = "TMM")
+
+  # Estrarre i geni normalizzati.
+  normalized_counts <- as.data.frame(cpm(y, normalized.lib.sizes = TRUE))       
+  
+  
+  
+  # build the design matrix
+  design <- model.matrix(~ 0 + group)
+  colnames(design) <- levels(group)
+  
+  # compute common, trend, tagwise dispersion
+  y <- estimateDisp(y,design = design)
+    
+  # fit the negative binomial GLM for each tag
+  fit <- glmFit(y, design=design)
+  
+  # Definire il contrasto
+  contrast <- makeContrasts(contrasts=contrasto,levels = colnames(design))
+  
+  # Test statistico
+  lrt <- glmLRT(fit,contrast = contrast)
+  
+  output <- list( tep.expr.filtr.normalized = normalized_counts,
+                  stime = y, 
+                  tests = lrt
+                 
+                )
+  return(output)
+}
+```
+
+
+\newpage 
+## **degs_extraction**, estrazione DEGs
+
+Questa funzione prende in input l'output della funzione **find_DEGs**, ovvero *find_DEGSoutput*, e restituisce:
+
+\begin{itemize}
+  \item Dataframe delle metriche, valori di logCPM, logFC, FDR, PValue  per ogni gene
+  \item Dataframe delle metriche, valori di logCPM, logFC, FDR, PValue  solo per i DEGs
+  \item DEGs.tep.expr.filtr, equivalente a tep.expr.filtr ma solo con DEGs
+  \item DEGs.tep.expr.filtr.normalized, equivalente a tep.expr.filtr.normalized ma solo con DEGs
+\end{itemize}
+
+
+
+```{r}
+degs_extraction <- function(find_DEGSoutput,logCPM.threshold,FDR.threshold){
+  
+  # Definire le threshold e identificare i DEGs
+  
+  ## Numero di geni presi in considerazione
+  ngeni <- nrow(find_DEGSoutput$tep.expr.filtr.normalized)
+  
+  tep.expr.filtr.normalized <- find_DEGSoutput$tep.expr.filtr.normalized
+  
+  
+  ## Estrarre l'oggetto che contiene le metriche per tutti gli n geni
+  metriche <- topTags(find_DEGSoutput$tests, n = ngeni)$table
+  
+  ## Applicare le threshold e trovare i DEGs
+  DEGs.metriche <- metriche[(metriche$logCPM > logCPM.threshold) 
+                                          & 
+                                          (metriche$FDR < FDR.threshold), ]
+  
+  ## Printare numero di DEGs identitificati con le threshold scelte
+  print("Quanti DEGs?")
+  print(dim(DEGs.metriche)[1])
+  
+  #---------------------------------------------------------------------------#
+  # Estrarre i DEGs dai dataframe tep.expr.filtr, tep.expr.filtr.normalized
+  
+  ## Isolare pancancer-hc DEGs nel tep.expr.filtr
+  DEGs.tep.expr.filtr <- tep.expr.filtr[ rownames(tep.expr.filtr) 
+                                                     %in% 
+                                                    rownames(DEGs.metriche), ]
+
+  print("Dimensioni del dataset tep.expr.filtr composto solo da DEGs")
+  print(dim(DEGs.tep.expr.filtr))
+  
+  
+  ## Isolare  pancancer-hc DEGs nel tep.expr.filtr.normalized
+  DEGS.tep.expr.filtr.normalized <- tep.expr.filtr.normalized[ 
+                                                      rownames(tep.expr.filtr) 
+                                                       %in% 
+                                                      rownames(DEGs.metriche), ]
+  
+  print("Dimensioni del dataset tep.expr.filtr.normalized composto solo da DEGs")
+  print(dim(DEGS.tep.expr.filtr.normalized))
+  #---------------------------------------------------------------------------#
+    
+  output <- list( metriche = metriche,
+                  DEGs.metriche = DEGs.metriche,
+                  DEGS.tep.expr.filtr.normalized = DEGS.tep.expr.filtr.normalized,
+                  DEGs.tep.expr.filtr = DEGs.tep.expr.filtr
+    
+    
+  )
+    
+    
+  return(output)
+}
+```
+
+
+\newpage 
+## Volcano plot
+
+Si vedano due funzioni che sfruttano il dataframe delle metriche e dei threshold su due metriche 
+FC e Pvalue per detrminare quali siano gli UP e quali siano i DOWN regulated genes e poi produrre un volcano plot.    
+
+### **get_expr.table**, funzione per creare la  expr.table poi utilizzata per il volcano plot
+La funzione **get_expr.table** prende in input:
+\begin{itemize}
+  \item Dataframe delle metriche, valori di logCPM, logFC, FDR, PValue  per ogni gene
+  \item Threshold per FC
+  \item Threshold per Pvalue
+\end{itemize}
+
+
+La funzione **get_expr.table** restistuisce in output:
+\begin{itemize}
+  \item Restituisce la expr.table.
+\end{itemize}
+
+La expr.table è un dataframe che per ogni gene contiene le metriche per ogni gene e se quest'ultimo sia un DEGs 
+UP o DOWN regulated o non sia affatto un DEGs.   
+ 
+
+```{r}
+get_expr.table <- function(expr.table,fc_threshold,p_value_threshold){
+
+  # Inizializzare tutti i geni a non differentially expressed
+  expr.table$diffexpressed <- "NO";
+  
+  # Correggere i PValue per coerenza con il metodo DESeq2,
+  ## va fatto questo perchè poi saranno confrontati
+  expr.table$PValue.adjust <- p.adjust( expr.table$PValue, method="fdr")
+  
+  
+  # If the values of the genes are bigger then the FC threshold and smaller
+  # than the p-value (null hypothesis not rejected)
+  # then their are UP genes (upregulated genes)
+  expr.table$diffexpressed[expr.table$logFC >= fc_threshold & 
+                             expr.table$PValue.adjust <= p_value_threshold] <- "UP"
+  
+  # If they are smaller than the FC threshold and smaller and smaller
+  # than the p-value (null hypothesis not rejected)
+  # They are DOWN (down regulated genes)
+  expr.table$diffexpressed[expr.table$logFC  <= -fc_threshold & 
+                             expr.table$PValue.adjust <= p_value_threshold] <- "DOWN"  
+  
+  expr.table$diffexpressed <- as.factor(expr.table$diffexpressed)
+  
+  return(expr.table)  
+}
+
+```
+
+\newpage 
+### **volcano_plot**, funzione per produrre un volcano plot
+
+La funzione **volcano_plot** prende in input:
+\begin{itemize}
+  \item Il dataframe  expr.table
+\end{itemize}
+
+
+La funzione **volcano_plot** restistuisce in output:
+\begin{itemize}
+  \item Restituisce nulla, produce solo il volcano plot
+\end{itemize}
+
+
+```{r}
+volcano_plot <- function(expr.table){
+
+  p <- ggplot(data=expr.table, aes(x=logFC, y=-log10(PValue.adjust), col=diffexpressed))+  
+        geom_point() +
+        xlab("fold change (log2)") + 
+        ylab("-log10 adjusted p-value") +
+        geom_hline(yintercept=-log10(p_value_threshold), col="red")+
+        geom_vline(xintercept=fc_threshold, col="red")+
+        geom_vline(xintercept=-fc_threshold, col="red")
+
+  print(p)
+  
+
+}
+```
+
+
+\newpage 
+# 03 Pipeline differential co-expression network analysis
+
+Dopo aver calcolato i **DEG** generalmente si procede con i  **differential co-expression network** analysis
+in modo da identificarne gli hubs e restringere ancora il campo di quelli che possono essere 
+i **potenziali biomarker**.   
+
+La pipeline per il calcolo dei differential co-expression network analysis prevede diverse funzioni.
+
+Le principali sono:
+\begin{itemize}
+\item \textbf{evaluate$\_$zscores}, utilizzata  per il calcolo degli zscores
+\item \textbf{differential$\_$zoexpression$\_$network}, utilizzata per calcolare la adjacency.matrix, trovare hubs, costruire il network.
+\end{itemize}
+
+La funzione **evaluate_zscores**  prende in input
+l'espressione  normalizzata dei DEGs per le due patologie che si stanno confrontando.       
+Per poi procedere con:
+
+\begin{enumerate}
+  \item Calcolo delle correlazioni
+  \item Applicare la fisher Transformation formula
+  \item Calcolare e restituire in output gli zscores
+\end{enumerate}
+
+
+
+Più precisamente nella funzione **differential_coexpression network** (prende in input zscores e threshold):
+
+\begin{enumerate}
+  \item Viene calcolata la adjacency matrix sfruttando gli zscores ed il threshold fornit
+  \item Viene calcolato il degree per ogni nodo
+  \item Vengono scartati i gene con degree pari a 0 sia dalla ricerca degli hubs
+      sia dalla adjacency matrix
+  \item Vengono identificati gli hubs
+  \item Viene costruito il grafo sfruttando la adjacency matrix
+\end{enumerate}
+
+\newpage
+
+## **evaluate_zscores**, funzione per il calcolo per gli zscores
+
+La funzione **evaluate_zscores** prende in input:
+\begin{itemize}
+  \item Le tep.expr.filtr.normalized per le due condizioni
+\end{itemize}
+
+
+La funzione **evaluate_zscores** restistuisce in output:
+\begin{itemize}
+  \item Restituisce gli zscores
+\end{itemize}
+
+
+```{r}
+#correlation with method Pearson
+corr <- function(dat){
+  cor(t(dat),method = "pearson")
+}
+
+# Fisher Transformation formula
+ft <- function(x){
+  return (1/2 * log((1+x)/(1-x)))
+}
+
+# Z-scores formula
+z <- function(x,y,n1,n2){
+  v1 = 1/(n1-3)
+  v2 = 1/(n2-3)
+  zf = x - y
+  vf = v1 + v2
+  
+  return (zf/sqrt(vf))
+}
+
+evaluate_zscores <- function(matrix.condition1,matrix.condition2){
+
+  # similarity matrix condition 1
+  sim.condition1 <- corr(matrix.condition1)
+  
+  # similarity matrix condition 2
+  sim.condition2 <- corr(matrix.condition2)
+  
+  # remove diagonal
+  diag(sim.condition1) <- diag(sim.condition1) <- 0
+  diag(sim.condition2) <- diag(sim.condition2) <- 0
+      
+  
+  # apply function to the respective matrices
+  FT.sim.condition1 = apply(sim.condition1, 2, ft)
+  FT.sim.condition2 = apply(sim.condition2, 2, ft)
+    
+  
+  n1 <- ncol(matrix.condition1)
+  n2 <- ncol(matrix.condition2)
+  
+  # apply function to the respective tumor types
+  zscores <- mapply(z,as.data.frame(FT.sim.condition1),
+                    as.data.frame(FT.sim.condition2),
+                    n1,
+                    n2
+                   )
+  
+  rownames(zscores) <- colnames(zscores)
+  
+  return(zscores)
+}
+```
+
+
+
+\newpage
+## **differential_coexpression_network**, funzione per calcolare adjacency.matrix, trovare hubs, costruire il network
+
+La funzione **differential_coexpression_network** prende in input:
+\begin{itemize}
+  \item Gli zscores
+  \item La threshold per gli zscores
+\end{itemize}
+
+
+La funzione **differential_coexpression_network** restistuisce in output:
+\begin{itemize}
+  \item Un dataframe contenente gli hubs ed il loro degree
+  \item Il differential co expression network
+  \item La matrice di adiacenza
+  \item Un dataframe contenente il  degree di tutti i geni nel network
+  \item Un dataframe contenent il  degree di tutti i geni nel network escludendo quelli con degree pari a 0
+\end{itemize}
+
+
+
+```{r warning=FALSE}
+differential_coexpression_network <- function(z,threshold){
+  
+  # Calcolare la adjacency.matrix basandosi sulla threshold fornita in input
+  ## Se z >= t assegnare 1, sennò andare all'altro ifelse
+  ## l'altro ifelse fa: se z <= -t assegnare 1 sennò 0
+  adjacency.matrix <- ifelse(z >= (threshold), 1, ifelse(z <= (-threshold), -1, 0))  
+  #adjacency.matrix <- ifelse(z <= -threshold | z >= threshold, 1, 0)
+  #diag(adjacency.matrix) <- 0
+  
+#----------------------------------------------------------------------------#
+  
+  # Calcolare il degree per ogni gene
+  degree <- rowSums(abs(adjacency.matrix))
+  
+  ## Creare un dataframe che fornisca il nome (enseble) per ogni gene ed il suo degree
+  degree <- as.data.frame(cbind(colnames(adjacency.matrix),degree))
+  
+  ## Rinominare le colonne del dataframe per maggiore chiarezza
+  colnames(degree) <- c("gene","degree")
+  
+  ## Trasformare la colonna degree da stringa in numeri interi
+  degree$degree <- as.integer(degree$degree)
+
+#----------------------------------------------------------------------------#
+  # Genes with a degree below 1 were excluded 
+  degree.zero <- degree[degree$degree > 0, ]
+#----------------------------------------------------------------------------#
+  
+  # Hubs
+  ## Calcolare la soglia per la quale un gene con degree superiore viene 
+  ## classificato come hubs
+  q <- quantile(degree.zero$degree, probs = c (0.95))
+  
+  ## Trovare gli hubs sfruttando la soglia q
+  hubs <- degree.zero[degree.zero$degree > q, ]
+#----------------------------------------------------------------------------#
+  
+
+  # Escludere dalla adjacency.matrix i geni con degree pari a 0.
+  
+  ## Trovare il nome (enseble) dei geni che hanno degree pari a 0
+  excluded.genes <- setdiff(degree$gene, degree.zero$gene)
+  
+  ## Trovare l'indice (enseble) dei geni che hanno degree pari a 0
+  idx <- which(colnames(adjacency.matrix) %in% excluded.genes)
+  
+  ## Rimuovere i geni  con degree pari a 0 sfruttando il loro  indice 
+  adjacency.matrix<- adjacency.matrix[-idx,-idx]
+  #diag(adjacency.matrix) <- 0
+#----------------------------------------------------------------------------#
+  # Costruire il network utilizzando l' adjacency matrix
+  net <- network(adjacency.matrix, matrix.type="adjacency",ignore.eval = T, directed = F)
+  
+  
+#----------------------------------------------------------------------------#
+  #Definire l'output
+  output <- list( all_degree = degree,
+                  degree = degree.zero,
+                  adjacency.matrix = adjacency.matrix,
+                  network = net,
+                  hubs = hubs,
+                  geni.esclusi = excluded.genes
+
+                )
+    
+  
+  return(output)
+}
+```
+
+
+
+
+
+\newpage 
+
+## Informazioni sul grafo
+
+Si costruisca una funzione costituita da diverse funzioni che restituisca grafici e informazioni sul differential co-expression network.
+
+### **output_info**, informazioni generali sull'output della funzione differential coexpression network
+
+
+La funzione **output_info** prende in input:
+\begin{itemize}
+  \item L' output della funzione \textbf{differential$\_$coexpression$\_$network}
+\end{itemize}
+
+
+La funzione **output_info** restistuisce in output:
+\begin{itemize}
+  \item Non restituisce niente, printa solo delle informazioni sugli elementi contenuti nell'output
+\end{itemize}
+
+
+```{r}
+output_info <- function(output){
+
+  # Osservare l'output
+  ## Dimensioni del dataframe contenente tutti i degs ed il loro degree nel grafo
+  print("Dimensioni del dataframe contenente tutti i degs ed il loro degree nel grafo")
+  print(dim(output$all_degree)) 
+  
+  ## Dimensioni del dataframe contenente tutti i degs con degree > 0 ed il loro degree
+  ## nel grafo
+  print("Dimensioni del dataframe contenente tutti i degs con degree > 0 ed il loro degree nel grafo")
+  print(dim(output$degree)) 
+  
+  ## Dimensioni del dataframe contenente gli hubs
+  print("Dimensioni del dataframe contenente gli hubs")
+  print(dim(output$hubs)) 
+  
+  ## Dimensioni della adjacency matrix usata per definire il grafo
+  print("Dimensioni della adjacency matrix usata per definire il grafo")
+  print(dim(output$adjacency.matrix)) 
+  
+  # Quanti geni (nodes) ci sono nel grafo?
+  print("Quanti geni (nodes) ci sono nel grafo?")
+  print(network.size(output$network)) 
+  
+  # Quanti links (collegamenti tra geni) ci sono nel grafo?
+  print("Quanti links (collegamenti tra geni) ci sono nel grafo?")
+  print(network.edgecount(output$network)) 
+}
+```
+
+
+\newpage
+### **plot_network**, plottare il differential co-expression network 
+
+    
+
+La funzione **plot_network** prende in input:
+\begin{itemize}
+  \item L'oggetto R che contiente il differential co-expression network 
+  \item Il dataframe contenente la lista degli hubs ed il loro degree
+  \item Un booleano chiamato \textit{titoli}, che serve a decidere se avere un grafico con il titolo o meno
+\end{itemize}
+
+
+La funzione **plot_network** restistuisce in output:
+\begin{itemize}
+  \item Non restituisce niente, printa solo il differential co-expression network tramite ggnet.
+  In più evidenzia in rosso gli hubs, mentre gli altri geni sono in blu.    
+\end{itemize}
+
+
+
+```{r}
+plot_network <- function(net,hubs,titoli){
+
+  # Distinguere hubs e non
+  net  %v% "type" = ifelse(network.vertex.names(net) %in% hubs$gene,
+                           "hub", "non-hub")
+  
+  # Se il node è un hub assegnargli colore rosso, altrimenti blu
+  net  %v% "color" = ifelse(net  %v% "type" == "hub",
+                            "tomato", "deepskyblue3")
+  
+  
+  # Creare l'oggetto ggnet
+  p <- ggnet2(net,                  # Specificare il network da plottare
+               color = "color",      # Usare i colori assegnati nell'attributo 'color'
+               alpha = 0.7,          # Imposta il livello di trasparenza per i nodi del grafo.
+                                     ## 0.7 -> nodi  leggermente trasparenti. 0 traspara
+                                     ##  alpha tra 0 (traspararente) e 1 (opaco).
+               size = 2,             # Dimensioni dei nodi
+                
+               edge.alpha = 1,       # Livello di trasparenza dei link
+               edge.size = 0.15)  +  # Dimensioni dei link
+               guides(size = "none") #Disattiva la legenda per la dimensione dei nodi.
+     
+     
+     
+  # Se titoli == T aggiungere il titolo al grafico, sennò no. 
+  if (titoli) {
+    
+    # Se si vuole un titolo (if soddisfatto) aggiungerlo
+    p <- p  + ggtitle("Differential co-expression network ")  +  # Aggiungere il titolo 
+        theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))  # Centra il titolo
+  }  
+  
+
+  
+    
+  # Plottare il grafo
+  print(p)
+}
+```
+
+
+\newpage 
+### **plot_network_hubs**, plottare il differential co-expression network  composto da sole hubs
+
+La funzione **plot_network_hubs** prende in input:
+\begin{itemize}
+  \item La matrice di adiacenza
+  \item Il dataframe contenente la lista degli hubs ed il loro degree
+  \item Un booleano chiamato \textit{titoli}, che serve a decidere se avere un grafico con il titolo o meno
+\end{itemize}
+
+
+La funzione **plot_network_hubs** restistuisce in output:
+\begin{itemize}
+  \item Non restituisce niente, plotta il differential co-expression network ma con focus esclusivamente tra gli hubs.      
+\end{itemize}
+
+
+
+
+
+In questo modo si ha un grafo più piccolo e comprensibile.
+
+```{r  , warning=FALSE}
+plot_network_hubs <- function(adjacency.matrix,hubs,titoli){
+
+  # Definire la adjacency matrix solo degli hubs
+  ## Identificare l'indice degli hubs
+  idx <- which(colnames(adjacency.matrix) %in% hubs$gene)
+  
+  ## Tramite l'indice definire una nuova  adjacency.matrix composta solo da hubs
+  adjacency.matrix<- adjacency.matrix[idx,idx]
+
+  
+  
+  #----------------------------------------------------------------------------#
+  
+  # Creare un nuovo network composto solo da hubs
+  net.hub <- network(adjacency.matrix, matrix.type="adjacency",ignore.eval = T, directed = F)
+  
+  # How many nodes (genes) in the graph?
+  print("Nodes (grafo soli hubs):")
+  print(network.size(net.hub))
+  
+  
+  # How many links  in the graph?
+  print("Links (grafo soli hubs):")
+  print(network.edgecount(net.hub))
+  
+  
+  # Crea le etichette dei nodi corrispondenti
+  labels <- sapply(network.vertex.names(net.hub), function(x) {
+    match_label <- gene.info$Symbol[gene.info$EnsemblGeneID == x]
+    ifelse(length(match_label) > 0, match_label, NA)
+  })
+  
+  
+  # Creare l'oggetto ggnet, che sarebbe il plot del grafo
+  p<- ggnet2(net.hub,
+             color = "tomato", # Usare un colore unico per i nodi
+             alpha = 0.9,
+             size = 3, 
+             mode="fruchtermanreingold", # Specifica il layout del grafo.
+                                         ## Il layout di Fruchterman-Reingold è un algoritmo 
+                                         ## di disposizione per grafi che cerca di ottimizzare 
+                                         ## la disposizione dei nodi 
+             edge.color = "lightgray",
+             edge.alpha = 0.9, 
+             edge.size = 0.15,
+             node.label = labels,  # Specifica le etichette
+            label.color = "black", # Definisce il colore delle etichette
+            label.size = 2) +  # Definisce la dimensione delle etichette
+            guides(size = "none")
+  
+  # Se titoli == T verrà aggiunto il titolo, sennò no.
+  if (titoli){
+    
+    # Se si vuole un titolo (if soddisfatto) aggiungerlo
+    p <-   p  + ggtitle("Differential co-expression network focus sugli hubs") +   # Aggiungere il titolo 
+               theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))  # Centra il titolo
+  }
+  
+
+  
+  print(p)
+}
+```
+
+
+\newpage
+### **info_grafo**, unire le 3 funzioni precedenti per richiamarle più facilmente
+
+
+La funzione **info_grafo** prende in input:
+\begin{itemize}
+   \item L' output della funzione \textbf{differential$\_$coexpression$\_$network}
+ \item Un booleano chiamato *titoli*, che serve a decidere se avere un grafico con il titolo o meno
+     Tramite titoli specificare se si vogliono o meno i titoli sui grafici.        
+    \begin{itemize}
+      \item titoli$=$\textbf{T}, ci sono i titoli. 
+      \item titoli$=$\textbf{F}, non ci sono i titoli. 
+  \end{itemize}
+  Questa funzione è stata aggiunta perchè può essere utile se i grafici devono essere 
+  esportati su un documento latex ed il titolo verrò assegnato direttamente nel documento.    
+
+\end{itemize}
+
+
+La funzione **info_grafo** restistuisce in output:
+\begin{itemize}
+  \item Non restituisce niente,   si limita a richiamare le funzioni:
+  
+  \begin{itemize}
+    \item \textbf{output$\_$info}
+    \item \textbf{plot$\_$network}
+    \item \textbf{plot$\_$network$\_$hubs}
+  \end{itemize}
+\end{itemize}
+
+
+```{r}
+info_grafo <- function(output,titoli){
+  
+  # Restituire le dimensioni degli oggetti: adjacency matrix, hubs, network
+  output_info(output)
+  
+  # Plottare tutto il grafo
+  plot_network(output$network, output$hubs,titoli)
+  
+  # Plottare il grafo con focus sugli hubs
+  plot_network_hubs(output$adjacency.matrix,output$hubs,titoli)
+}
+```
+
+
+\newpage 
+### **info_hubs**, funzione per mettere insieme le varie informazioni sugli hubs
+
+Questa funzione mette insieme le informazioni di vari dataframe come:
+
+\begin{itemize}
+  \item \textbf{hubs} per avere la lista degli hubs ed il loro degree
+  \item \textbf{gene.info}, per le informazioni su i geni, il loro nome Symbol e non Ensemble, il ruolo che svolgono, descrizione, tipo...
+  \item \textbf{expr.table} per avere le metriche FC, logCPM, FDR... 
+\end{itemize}
+
+La funzione **info_hubs** prende in input:
+\begin{itemize}
+  \item  Il dataframe contenente la lista degli hubs ed il loro degree
+  \item  Dataframe delle metriche, valori di logCPM, logFC, FDR, PValue  per ogni gene DEGs
+\end{itemize}
+
+
+La funzione **info_hubs** restistuisce in output:
+\begin{itemize}
+  \item Un dataframe contenente tutte le informazioni reperibili per ogni gene DEGs
+  \item Un dataframe contenente le informazioni più utili per ogni gene DEGs
+\end{itemize}
+
+
+
+```{r}
+info_hubs <- function(hubs,dataframe.metriche){
+  hubs.info<- gene.info[gene.info$EnsemblGeneID %in%  hubs$gene, ]
+  
+  hubs.info <- merge(hubs,
+                     hubs.info,
+                     by.x = "gene",
+                     by.y = "EnsemblGeneID",all=T )
+
+  hubs.info <- merge(dataframe.metriche,
+                     hubs.info,
+                     by.x = "row.names",
+                     by.y = "gene",all=F )
+
+  colnames(hubs.info)[1] <- "EnsemblGeneID"
+  
+  hubs.shortinfo <- hubs.info
+  
+  ordine_colonne <- c(1,8,7,11,12,16,2,3,4,5,6,17)
+  hubs.shortinfo <- hubs.shortinfo[,ordine_colonne]
+  
+  output <- list(all.hubs.info= hubs.info,
+                 short.hubs.info = hubs.shortinfo
+                )
+  
+  return(output)
+}
+```
+
+
+
+
+
+
+# Funzioni per la vecchia metodologia 
+
+
+
+## DEGs  tramite DESeq2
+
+### **old_find_DEGs**, funzione per calcolare i DEGs secondo la metodologia del corso
+
+```{r}
+old_find_DEGs <- function(full.data,metad,first_group_length,thresholds_list){
+  # Define the DESq2 object
+  dds <- DESeqDataSetFromMatrix(countData=full.data,# Provide gene-patient data 
+                                colData=metad,      # Provide the condition of the patient
+                                                  # patient - condition (LGG o GBM)
+                                design= ~condition, # Specify the column
+                                tidy=TRUE)
+  
+  total_rows <- ncol(full.data)-1
+    
+  
+  # Questa parte di selezione dei geni comuni viene rimossa perchè
+  # non c'è una parte simile in edgeR
+  
+  # Select the genes that are in at least the 90% of the patients
+  #n_pazienti_90<-  round((total_rows/100) * 90,2)
+  #keep <- rowSums(counts(dds) >= 10) >= n_pazienti_90
+  
+  ## Ridefine the dataframe by taking only the genes 
+  ## that are in at least the 90% of the patients
+  #dds <- dds[keep,]
+  
+  #--------#
+  
+  # Normalize through DESq2
+  dds <- estimateSizeFactors(dds)
+  normalized_counts <- counts(dds, normalized=TRUE)
+  
+  
+  
+  filtr.expr.1 <- as.data.frame(normalized_counts[, 1:first_group_length])
+  filtr.expr.2 <- as.data.frame(normalized_counts[, (first_group_length+1):total_rows]) 
+
+  # Evaluate Fold Change (FC)
+  fc <- log2(rowMeans(filtr.expr.1) / rowMeans(filtr.expr.2))
+  
+  # Rename the values with the name of the corrispondend gene
+  names(fc) <- rownames(filtr.expr.1)
+  
+  # Get the  p-values
+  pval.fc <- sapply(1:nrow(filtr.expr.1),
+                   function(i)(t.test(filtr.expr.1[i,], filtr.expr.2[i,] ))$p.value)
+  
+  # Correcting for multiple comparison
+  pval.fc.fdr <- p.adjust(pval.fc, method="fdr")
+  
+  # Put those values in a dataframe
+  expr.table <- data.frame(cbind(fc, pval.fc.fdr))
+  
+  # Round the values of the FC
+  expr.table[,1] <- round(expr.table[,1],2)
+ 
+  
+
+                     
+                     
+  for (i in 1:length(thresholds_list)){
+    # Define the thresholds
+    fc_threshold <- thresholds_list[[i]]$FC
+    p_value_threshold <- thresholds_list[[i]]$p_value
+    
+    
+    # Select only the genes that are differenitally expressed
+    # By selecting the ones that are above the FC and below the p value
+    deg.genes <- rownames(expr.table[abs(expr.table$fc) >= fc_threshold &
+                                     expr.table$pval.fc.fdr <=p_value_threshold,]) 
+      
+    filtr.expr.deg.1 <-filtr.expr.1[rownames(filtr.expr.1) %in% deg.genes,]
+    filtr.expr.deg.2 <-filtr.expr.2[rownames(filtr.expr.2) %in% deg.genes,]
+    
+    cat("FC:", fc_threshold, "& p-value:", p_value_threshold, "-> Number of differentially expressed genes:", length(deg.genes), "\n")
+  }
+  
+  
+  output <- list(expr.table= expr.table,
+                 filtr.expr.normalized.1 = filtr.expr.1,
+                 filtr.expr.normalized.2 = filtr.expr.2
+              )
+
+  return(output)
+}
+
+```
+
+
+### **old_extract_deg_genes**, funzione per selezione DEG genes per determinati threshold
+
+```{r}
+old_extract_deg_genes <- function(expr.table,fc_threshold,p_value_threshold){
+   deg.genes <- rownames(expr.table[abs(expr.table$fc) >= fc_threshold &
+                                        expr.table$pval.fc.fdr <=p_value_threshold,]) 
+
+}
+```
+
+\newpage
+### **old_volcano_plot**, funzione per volcano plot
+
+```{r}
+old_volcano_plot <- function(expr.table,fc_threshold,p_value_threshold){
+
+  # Inizializzare tutti i geni a non differentially expressed
+  expr.table$diffexpressed <- "NO";
+  
+  # If the values of the genes are bigger then the FC threshold and smaller
+  # than the p-value (null hypothesis not rejected)
+  # then their are UP genes (upregulated genes)
+  expr.table$diffexpressed[expr.table$fc >= fc_threshold & 
+                             expr.table$pval.fc.fdr <= p_value_threshold] <- "UP"
+  
+  # If they are smaller than the FC threshold and smaller and smaller
+  # than the p-value (null hypothesis not rejected)
+  # They are DOWN (down regulated genes)
+  expr.table$diffexpressed[expr.table$fc <= -fc_threshold & 
+                             expr.table$pval.fc.fdr <= p_value_threshold] <- "DOWN"
+  
+  expr.table$diffexpressed <- as.factor(expr.table$diffexpressed)
+  
+  p <- ggplot(data=expr.table, aes(x=fc, y=-log10(pval.fc.fdr), col=diffexpressed))+  
+    geom_point() +
+    xlab("fold change (log2)") + 
+    ylab("-log10 adjusted p-value") +
+    geom_hline(yintercept=-log10(p_value_threshold), col="red")+
+    geom_vline(xintercept=fc_threshold, col="red")+
+    geom_vline(xintercept=-fc_threshold, col="red")
+
+    print(p)
+    return(expr.table)
+}
+```
+
+
+
+\newpage 
+# Esportare funzioni
+
+```{r }
+save(list = ls(), file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Replica Tesi/00) Funzioni.RData")
+```
+
+
+
+
+
+
+
+
+
+

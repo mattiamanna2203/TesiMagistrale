@@ -1,0 +1,252 @@
+---
+title: "Replica Tesi"
+author: "Mattia Manna"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+    number_sections: true 
+header-includes:
+- \usepackage{bbold}
+- \usepackage{mdframed, xcolor}
+- \mdfsetup{frametitlealignment=\center}
+- \usepackage{graphicx}
+---
+
+
+\pagenumbering{Roman}
+\renewcommand*\contentsname{Indice}
+\tableofcontents
+
+
+\newpage
+\pagenumbering{arabic}
+
+```{r libraries, include=FALSE}
+library(edgeR)
+library(ggplot2)
+```
+
+
+```{r import functions, include=FALSE}
+rm(list = ls(all.names = TRUE))
+load("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Replica Tesi/00) Funzioni.RData")
+```
+
+
+```{r imported data, include=FALSE}
+# Salva tutti i dati importati per poi eliminarli prima di esportarli
+# In questo modo ogni file di load di ogni script contiene solo i dati creati da lui
+# permettendo, ad esempio, di aggiungere funzioni in  00 senza il bisogno di runnare di nuovo  i file 01 e 02
+# Senza di questa  linea e la linea do.call(rm, as.list(imported.data)) alla fine dello script, infatti, 
+# gli script 01 e 02 salvavano le loro copie delle funzioni che rimanevano vecchie se si 
+# modificano le funzioni in 00 senza runnare 01 e 02 nuovamente causando gravi errori.
+imported.data <- ls()
+```
+
+
+
+# Importazione dati
+
+I dati sono stati scaricati dal [Gene Expression Omnibus](https://www.ncbi.nlm.nih.gov/geo/), https://www.ncbi.nlm.nih.gov/geo/ , in particolare dalla pagina   [**GSE68086**](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE68086), https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE68086.    
+ e salvati localmente.    
+ 
+Essendo stati salvati localmente vengono poi importati tramite le funzioni :
+\begin{itemize}
+  \item \textbf{read.delim}
+  \item \textbf{read.csv}
+\end{itemize}
+
+
+
+```{r collapse=TRUE,hold=TRUE}
+tep.expr <- read.delim("~/Desktop/Università/Magistrale/Tesi/R/GSE68086/GSE68086_TEP_data_matrix.txt", row.names=1)
+dim(tep.expr)
+
+patients <- read.csv("~/Desktop/Università/Magistrale/Tesi/R/GSE68086/patients.csv", row.names=1, sep=";")
+dim(patients)
+
+gene.info <- read.delim("~/Desktop/Università/Magistrale/Tesi/R/GSE68086/Human.GRCh38.p13.annot.tsv", row.names=1)
+dim(gene.info)
+```
+
+Nel dataset che contiente il livello di trascrizione per ogni gene in ogni sample il numero di righe  (genes) e di colonne (samples) è uguale a quello della tesi di Ali.        
+
+Nel dataset **patients** ci sono 285 pazienti (righe) e 17 loro caratteristiche (colonne).        
+
+Il dataset gene.info contiene  ulteriori informazioni riguardanti 39376.    
+
+
+
+\newpage
+# Ricodificare nomi dei sample
+
+Come prima cosa si nota  che il nome dei sample tra i due dataset viene codificato in maniera diversa.      
+Nel dataset **tep.expr** è nel formato "X3.Breast.Her2.ampl" mentre nel dataset **patients** "GSM1662534".    
+Si ricodifichino questi nomi per maggior chiarezza.   
+
+L'idea è di trovare il  sample name in tep.expr, formato "X3-Breast-Her2-ampl" 
+ il corrispondente in patients formato GSM1662534 sfruttando la colonna source_name_ch1 (formato "X3.Breast.Her2.ampl").       
+ 
+ Per fare questo bisogna:
+
+\begin{enumerate}
+  \item Ricodificare il formato "X3-Breast-Her2-ampl" in "3.Breast.Her2.ampl"
+  \begin{itemize}
+    \item  rimuovere la X iniziale 
+    \item sostituire il trattino - con il punto .
+  \end{itemize}
+  
+  \item Costruire una sorta di dizionario che colleghi ogni formato "3.Breast.Her2.ampl" al corrispettivo GSM1662534
+  
+  
+  \item Inizializzare un nuovo vettore, saranno i nuovi nomi per i sample di  \textbf{tep.expr}
+  \item Iterare lungo i nomi delle colonne di   \textbf{tep.expr} ovvero il nome dei sample e sul dizionario.   
+        Quando si trova il corrispettivo nel dizionario inserire nel posto i-esimo del vettore inizializzato 
+        il nome del sample nel formato GSM1662534
+  
+  \item Una volta finito  usare il nuovo vettore per dare i nomi alle colonne.
+
+\end{enumerate}
+
+
+
+
+```{r}
+# Come prima cosa creo un nuova colonna in modo da ricodificare i nomi dei sample
+## nei patients, da: "X3-Breast-Her2-ampl" in "X3.Breast.Her2.ampl" 
+## (formato usato nel tep.expr dataset) Per fare questo uso la built-in function sapply
+patients$sample_name <- sapply(
+                                # Vettore al quale applicare la funzione
+                                patients$source_name_ch1,
+                                
+                               # Funzione da applicare ad ogni valore nel vettore  
+                               function(x) gsub("-", ".", x) 
+                               )
+# è stata usata gsub a differenza di sub().  sub()  sostituisce solo la prima 
+## occorrenza,  gsub() sostituisce tutte le occorrenze del pattern specificato.
+
+colnames(tep.expr)<- sapply(colnames(tep.expr),# Vettore al quale applicare la funzione
+                               function(x) sub("X", "", x) # Funzione da applicare 
+                                                           # ad ogni valore nel vettore
+                               )
+
+
+# Definire una matrice che tenga traccia della corrispondenza 
+## tra i due formati di nomi, es "X3.Breast.Her2.ampl" corrisponde a GSM1662534
+dizionario_formato_nomi <- matrix(cbind(rownames(patients),patients$sample_name),ncol=2)
+
+# Definire il vettore dei vecchi nomi, su questo andrà iterato
+old_names <- colnames(tep.expr)
+
+
+# Inizializzare un nuovo vettore di nomi.
+nuovi_nomi <- rep(NA,length(old_names))
+
+
+# Iterare lungo i nomi delle colonne di  **tep.expr**
+for (i in 1: length(old_names)){
+  
+  # Iterare lungo il dizionario 
+  for (j in 1:nrow(dizionario_formato_nomi)){
+    
+    # Se il corrispettivo nel dizionario è uguale all'elemento i-esimo 
+    ## in "old_names"    inserire nel posto i-esimo 
+    ##  del vettore inizializzato il nome del sample nel formato GSM1662534
+    if (old_names[i] == dizionario_formato_nomi[j,2]){
+      
+      # inserire nel posto i-esimo del vettore inizializzato 
+      ## il nome del sample nel formato GSM1662534
+      nuovi_nomi[i] <- dizionario_formato_nomi[j,1]
+      
+      # Aggiungere linea per eliminare la j riga da dizionario_formato_nomi
+      ## aumenta l'efficienza del codice
+      
+      next # Procedere al prossimo elemento dei vecchi nomi
+    }
+    
+  }
+}
+
+# Usare il nuovo vettore per dare i nomi alle colonne.
+colnames(tep.expr) <- nuovi_nomi
+
+rm(i,j,nuovi_nomi,old_names)
+```
+
+
+\newpage
+# Filtraggio
+
+Il primo passaggio di Ali  è un filtraggio, dopo di esso  si arriva a 14411.   
+L'obiettivo di questa sezione è ottenere quel numero di geni (righe).    
+
+
+## transcripts with low expression (<5 reads in all samples) were excluded and read counts 
+
+ 
+```{r}
+tep.expr.filtr <- tep.expr[rowSums(tep.expr) >= 5, ]
+dim(tep.expr.filtr)
+```
+
+
+
+\newpage
+# Distinguere i patients per tipo di tumore 
+
+
+Creare un oggetto contentente i dati contenuti in tep.expr.filtr ma divididendoli per tipo di tumore.       
+La creazione di questo oggetto semplificherà alcune operazioni nella ricerca dei DEGs per le varie patologie.   
+
+```{r}
+# Tramite table ottenere il numero di pazienti per ogni tipo di cancro
+cancer.type.table <- table(patients$cancer.type.ch1)
+
+# Aggiungere il totale per capire se tornino i conti
+addmargins(cancer.type.table)
+
+# Creare un vettore contenente i nomi dei tipi di cancro, 6 tumori + Healty (HC)
+cancer.types <- names(cancer.type.table)
+```
+
+
+```{r}
+datasets.per.cancer <- list()  # Inizializzare una lista vuota
+
+for (i in 1:length(cancer.types)) {
+  # Usare [[ ]] per aggiungere elementi alla lista
+  datasets.per.cancer[[cancer.types[i]]] <- distinct_patients(tep.expr.filtr,
+                                                              cancer.types[i]) 
+  
+  cat("Dimensioni dataset relative al tumore :",
+      cancer.types[i], #tipo di cancro o HC
+       "->",
+      dim(datasets.per.cancer[[cancer.types[i]]]), #dimensione df corrispondente
+      "\n")
+}
+```
+
+
+
+
+```{r include=FALSE}
+do.call(rm, as.list(imported.data))
+rm(imported.data,i,cancer.types,dizionario_formato_nomi)
+save(list = ls(), file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Replica Tesi/01) Filtered_data.RData")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

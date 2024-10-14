@@ -1,0 +1,314 @@
+---
+title: "02) DEGs"
+author: "Mattia Manna"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+    number_sections: true 
+header-includes:
+- \usepackage{bbold}
+- \usepackage{mdframed, xcolor}
+- \mdfsetup{frametitlealignment=\center}
+- \usepackage{graphicx}
+---
+
+
+\pagenumbering{Roman}
+\renewcommand*\contentsname{Indice}
+\tableofcontents
+
+
+\newpage
+\pagenumbering{arabic}
+
+```{r libraries, include=FALSE,message=FALSE,warning=FALSE}
+library(edgeR)
+library(ggplot2)
+library(DESeq2) # Standardize data regarding genes.
+```
+
+
+
+
+
+```{r import data, include=FALSE}
+rm(list = ls(all.names = TRUE))
+load("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Replica Tesi/01) Filtered_data.RData")
+```
+
+```{r import functions, include=FALSE}
+load("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Replica Tesi/00) Funzioni.RData")
+```
+
+
+```{r imported data, include=FALSE}
+# Salva tutti i dati importati per poi eliminarli prima di esportarli
+# In questo modo ogni file di load di ogni script contiene solo i dati creati da lui
+# permettendo, ad esempio, di aggiungere funzioni in  00 senza il bisogno di runnare di nuovo  i file 01 e 02
+# Senza di questa  linea e la linea do.call(rm, as.list(imported.data)) alla fine dello script, infatti, 
+# gli script 01 e 02 salvavano le loro copie delle funzioni che rimanevano vecchie se si 
+# modificano le funzioni in 00 senza runnare 01 e 02 nuovamente causando gravi errori.
+imported.data <- ls()
+```
+
+
+Una tabella riassuntiva del numero di sample per ogni tumore presente nei dati.   
+```{r}
+cancer.type.table
+```
+
+# Pan - Cancer DGE
+
+##  Sintassi edgeR
+
+### Calcolare le metriche 
+
+Tramite la funzione **find.DEGs** :
+
+\begin{itemize}
+  \item \textbf{Normalizzare} il dataset della conta delle trascrizione dei geni
+  \item Calcolare le \textbf{metriche}: logCPM, FDR, FC, LR, Pvalue
+\end{itemize}
+
+
+```{r}
+# Definire dataset dei pan cancer cancer
+tep.expr.filtr.pancancer <- cbind(datasets.per.cancer$Breast,      #1
+                                 datasets.per.cancer$CRC,          #2
+                                 datasets.per.cancer$GBM,          #3
+                                 datasets.per.cancer$Hepatobiliary,#4
+                                 datasets.per.cancer$Lung,         #5
+                                 datasets.per.cancer$Pancreas      #6
+                             )
+
+# Dataset dei sani
+tep.expr.filtr.hc <- datasets.per.cancer$HC
+
+# Definire counts, group e contrast per avviare la ricerca dei DEGs
+counts <- cbind(tep.expr.filtr.pancancer, tep.expr.filtr.hc)
+group <- factor(c(rep("cancer",230),rep("HC",55)))
+contrast <- "cancer - HC"
+
+# Applicare la funzione "find_DEGs"
+find_DEGSoutput.pancancerVShc <- find_DEGs(counts,group,contrast)
+```
+
+
+\newpage
+### Definire le threshold e identificare i DEGs
+
+Applicando la funzione **degs_extraction** per identificare i DEGs ed isolarli dai dataframe tep.expr.filtr, tep.expr.filtr.normalized.
+
+Definire delle threshold per le metriche ed ottenere i DEGs, le threshold sono le seguenti:
+\begin{itemize}
+  \item $\text{logCPM} > 3$
+  \item $\text{FDR} < 0.01$
+\end{itemize}
+
+
+```{r}
+# Definire le threshold
+logCPM.threshold <- 3
+FDR.threshold <- 0.01
+
+# Richiamare la funzione degs_extraction
+output.degs_extraction.pancancerVShc <-degs_extraction(find_DEGSoutput.pancancerVShc,
+                                                       logCPM.threshold,
+                                                       FDR.threshold)
+```
+
+Ci sono 2635 differentially expressed genes.      
+
+
+\newpage
+### DEGs secondo logFC e PValue
+
+Dopo aver identificato i DEGs secondo il criterio che utilizzata al locCPM ed al FDR si utilizzi il criterio basato su FC e p-value per vedere cosa cambia.        
+
+
+Perciò si calcolino i DEGs e poi se ne faccia un volcano plot per visualizzarli meglio.     
+
+
+```{r}
+# Definire i threshold
+fc_threshold <- 1.2
+p_value_threshold <- 0.01
+
+# Estrarre le metriche dall'output della function degs_extraction
+metriche.pancancerVShc <- output.degs_extraction.pancancerVShc$metriche
+
+# Applicare la funzione get_expr.table e ottenenere la expr.table
+expr.table.pancancerVShc<- get_expr.table(metriche.pancancerVShc,fc_threshold,p_value_threshold)
+```
+
+
+
+
+
+### Volcano plot
+
+```{r echo=FALSE, fig.height=3}
+# Richiamare la funzione volcano_plot ed ottenere il volcano plot
+volcano_plot(expr.table.pancancerVShc)
+```
+
+
+
+Summary of the genes, how many are differentially expressed and how.  
+
+```{r}
+summary(expr.table.pancancerVShc$diffexpressed)
+```
+
+
+### Conclusioni PanCancer vs Healthy 
+
+Ci sono 2998 DEGs se si applica il criterio FC e Pvalue, ci sono 2635 DEGs se si applica il criterio
+logCPM e FDR.   
+
+Le threshold sono fissate a: $|\text{FC}| \geq 1.2 \ \& \ \text{p-value} \leq 0.01$ per il primo criterio, e 
+$\text{logCPM} > 3 \ \& \  \text{FDR.} <0.01$ per il secondo criterio.    
+
+
+
+## Sintassi DESeq2
+
+
+### Definire i dati
+```{r 1) dataset Pan - Cancer DEG}
+# Come prima cosa defininire il dataset dei cancer 
+tep.expr.pan.cancer <- cbind( datasets.per.cancer$Breast,
+                              datasets.per.cancer$CRC,
+                              datasets.per.cancer$GBM,
+                              datasets.per.cancer$Hepatobiliary,
+                              datasets.per.cancer$Lung,
+                              datasets.per.cancer$Pancreas)
+
+# Dataset dei sani
+tep.expr.healthy <- datasets.per.cancer$HC
+
+
+# Unire i dataset
+full.data <- data.frame(cbind(tep.expr.pan.cancer, tep.expr.healthy)) 
+full.data <- cbind(rownames(full.data), full.data)
+dim(full.data)
+```
+
+
+### Calcolare la expr.table 
+
+```{r 2) dataset Pan - Cancer DEG}
+# Fattori ricordando che:
+# - I primi  230 sono cancer
+# - Gli altri 55 sono cancer
+metad <- c(rep("Cancer",230),rep("HC",55))
+metad <- data.frame(metad)
+colnames(metad)[1] <- "condition"
+metad[,1] <- as.factor(metad[,1])
+
+
+thresholds_list <- list(
+                      list(FC=1.2,p_value=0.05),
+                      list(FC=1.2,p_value=0.01),
+                      list(FC=1.5,p_value=0.05),
+                      list(FC=1.5,p_value=0.01),
+                      list(FC=2.0,p_value=0.05),
+                      list(FC=2.0,p_value=0.01)
+                      )
+          
+
+
+
+output.pan.cancer <- old_find_DEGs(full.data,metad,230,thresholds_list)
+
+tep.expr.table.pan.cancerVShealthy <- output.pan.cancer$expr.table
+filtr.expr.pan.cancer <- output.pan.cancer$filtr.expr.normalized.1
+filtr.expr.healhty  <-  output.pan.cancer$filtr.expr.normalized.2
+```
+
+### Estrarre i DEGs
+
+
+```{r warning=FALSE}
+# Scelta threshold
+fc_threshold=1.2
+p_value_threshold=0.01
+
+
+deg.genes <- old_extract_deg_genes(tep.expr.table.pan.cancerVShealthy,fc_threshold,p_value_threshold)
+
+filtr.expr.DEG.pan.cancer <-filtr.expr.pan.cancer[rownames(filtr.expr.pan.cancer) %in% deg.genes,]
+filtr.expr.DEG.healhty    <-filtr.expr.healhty[rownames(filtr.expr.healhty) %in% deg.genes,]
+
+dim(filtr.expr.DEG.pan.cancer)
+dim(filtr.expr.DEG.healhty)
+```
+
+
+### Volcano plot, visualizzare i DEGs
+
+```{r volcano plot dataset Pan - Cancer DEG, echo=FALSE}
+tep.expr.table.pan.cancerVShealthy <- old_volcano_plot(tep.expr.table.pan.cancerVShealthy,
+                                                  fc_threshold,
+                                                  p_value_threshold)
+```
+
+
+Summary of the genes, how many are differentially expressed and how.  
+
+```{r}
+tep.expr.table.pan.cancerVShealthy$diffexpressed <- as.factor(tep.expr.table.pan.cancerVShealthy$diffexpressed)
+summary(tep.expr.table.pan.cancerVShealthy$diffexpressed)
+```
+
+
+\newpage
+## Conclusioni PanCancer VS Healhty DEGs
+
+La differenza sta nella normalizzazione.    
+Prendendendo gli stessi threshold:
+
+\begin{itemize}
+\item $\text{FC} \geq 1.2$
+\item $\text{PValue} \leq 0.01$
+\end{itemize}
+
+i risultati sono diversi, ifatti edgeR utilizza una normalizzazione TMM, DESeq2 no.            
+
+I risultati sono che si ottengono tramite **edgeR**:           
+
+```{r echo=FALSE}
+summary(expr.table.pancancerVShc$diffexpressed)
+```
+
+Totale di 2998 DEGs.        
+
+
+
+I risultati sono che si ottengono tramite  **DESeq2**:        
+
+```{r echo=FALSE}
+summary(tep.expr.table.pan.cancerVShealthy$diffexpressed)
+```
+
+Totale di 4028 DEGs.
+
+
+
+Un'altra considerazione è che **edgeR** sia più veloce di **DESq2**.    
+
+
+
+
+```{r include=FALSE}
+do.call(rm, as.list(imported.data))
+rm(imported.data,counts,contrast)
+save(list = ls(), file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Replica Tesi/02) DEGs.RData")
+```
+
+
+
+
+
+
