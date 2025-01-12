@@ -1,0 +1,544 @@
+---
+title: "Tecniche per risolvere il problema di Data Leakage"
+author: "Mattia Manna"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+    number_sections: true 
+header-includes:
+- \usepackage{bbold}
+- \usepackage{mdframed, xcolor}
+- \mdfsetup{frametitlealignment=\center}
+- \usepackage{graphicx}
+---
+
+
+\pagenumbering{Roman}
+\renewcommand*\contentsname{Indice}
+\tableofcontents
+
+
+\newpage
+\pagenumbering{arabic}
+
+```{r clean environment, include=FALSE}
+rm(list = ls(all.names = TRUE))
+load("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Comparazione metodologie/Data/00) Funzioni.RData")
+source("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Normalizzazione TMM/TMMbyHand.R")
+```
+
+
+
+```{r libraries, include=FALSE,message=FALSE,warning=FALSE}
+library(edgeR)
+library(ggplot2)
+library(DESeq2) # Standardize data regarding genes.
+library(readxl) # Per importare dati da file excel
+
+
+library(rsample) # per dividere in train e test con stratify
+library(purrr)
+library(WGCNA)
+library(network)  # work with graphs
+library(ggnet)
+library(psych) 
+library(dplyr)
+library(tibble)
+```
+
+
+```{r}
+dataframe.formato.classificazione <- function(dataframe){
+  
+  # Trasporre il dataframe delle conte di test, in questo modo si hanno le conte 
+  # disposte nel modo giusto per la classificazione: pazienti sulle righe e geni sulle colonne 
+  dataframe <- as.data.frame(t(dataframe))
+  
+  # Aggiungere le label y (cancer sano) alle conte 
+  dataframe <- merge(dataframe,patients.summary,by.x="row.names",
+                                    by.y="sample_name",all = FALSE)
+  
+  # Sistemare il dataframe dopo l'operazione di merge, rimettere i rownames al posto giusto
+  rownames(dataframe) <- dataframe$Row.names
+  
+  # Eliminare la colonna rownames
+  dataframe <- dataframe %>% select(-"Row.names")
+  
+  return(dataframe)
+}
+```
+
+
+
+# Importazione dati, pulizia e filtraggio 
+
+## Importazione dati
+
+Importare i dati salvati localmente.    
+```{r collapse=TRUE,hold=TRUE}
+tep.expr <- read.delim("~/Desktop/Università/Magistrale/Tesi/R/GSE68086/GSE68086_TEP_data_matrix.txt", row.names=1)
+dim(tep.expr)
+
+patients <- read.csv("~/Desktop/Università/Magistrale/Tesi/R/GSE68086/patients.csv", row.names=1, sep=";")
+dim(patients)
+
+gene.info <- read.delim("~/Desktop/Università/Magistrale/Tesi/R/GSE68086/Human.GRCh38.p13.annot.tsv", row.names=1)
+dim(gene.info)
+```
+
+
+## Pulizia dati
+
+Siccome ci sono delle incongruenze tra il nome dei sample nei dataframe:
+\begin{itemize}
+  \item patients, dataset contenente le informazioni per ogni sample
+  \item tep.expr, dataset contenente la conta per i geni 
+\end{itemize}
+
+sistemare queste incongruenze.    
+```{r}
+patients$sample_name <- sapply( patients$source_name_ch1,    # Vettore al quale applicare la funzione
+                                
+                               # Funzione da applicare ad ogni valore nel vettore  
+                               function(x) gsub("-", ".", x)
+                               )
+colnames(tep.expr)<- sapply(colnames(tep.expr), function(x) sub("X", "", x))
+```
+
+
+
+## Filtrare
+Filtrare per la condizione: almeno un sample con count > 5
+```{r}
+tep.expr.filtr <- tep.expr %>% filter_all(any_vars(. >= 5))
+dim(tep.expr.filtr)
+```
+
+
+
+
+
+
+
+
+\newpage
+
+## Prendere count GBM e SANI e filtrare di nuovo
+
+```{r collapse=TRUE,hold=TRUE}
+# Specificare la condizione da analizzare
+condizione.da.analizzare = "GBM" 
+
+# Estrarre MALATI con la condizione specificata
+condition.samples <- patients[patients$cancer.type.ch1==condizione.da.analizzare,]$sample_name
+
+# Dimensioni del samples (controllo per la correttezza dei risultati)
+n.condition.samples <- length(condition.samples)
+print(n.condition.samples)
+
+
+
+# Estrarre il nome/codice dei  sample SANI
+healhty.samples <- patients[patients$cancer.type.ch1=="HC",]$sample_name
+
+## Dimensioni del samples (controllo per la correttezza dei risultati)
+length(healhty.samples)
+
+
+# Unire SANI e MALATI
+tutti.samples <- c(condition.samples,healhty.samples)
+length(tutti.samples)
+
+
+# Filtrare la matrice delle conte di nuovo perchè sono state selezionate solo alcune patologie
+counts <- tep.expr.filtr[, tutti.samples]
+counts <- counts %>% filter_all(any_vars(. >= 5))
+dim(counts)
+```
+
+Estrarsi in sommario dei pazienti presi in considerazione.    
+
+```{r}
+patients.summary <- patients[patients$sample_name %in% colnames(counts),c("sample_name","cancer.type.ch1")]
+patients.summary[1:5,]
+```
+
+
+
+
+
+
+
+\newpage
+# Calcolo dei DEGS sul TRAIN set
+
+
+### DEGS su tutto il dataframe con TMM 
+
+
+Numero degs su tutto il dataframe senza TMM (no divisione train e test).    
+
+
+```{r include=FALSE}
+group <- factor(c(rep("GBM",40),rep("HC",55)))
+
+# Creazione dell'oggetto DGEList
+oggettoDGEList <- DGEList(counts = counts, group = group)
+
+oggettoDGEList <- calcNormFactors(oggettoDGEList, method = "TMM")
+
+# Funzione equivalente a calcNormFactors ma che permette di salvare informazioni aggiuntive sui parametri
+# ad esempio: ref column, divisore = exp(mean(log(f))) 
+parametri.TMM <- TMMbyHand(counts)
+
+# Normalizzare con CPM e le standard lib sizes
+normalized_counts <- cpm(oggettoDGEList,
+                         normalized.lib.sizes = T,
+                         prior.count= 1 ,
+                         log = T)
+
+normalized_counts <- as.data.frame(normalized_counts) # renderlo un dataframe
+
+# build the design matrix
+design <- model.matrix(~ 0 + group)
+
+colnames(design) <- levels(group)
+
+# compute common, trend, tagwise dispersion
+y <- edgeR::estimateDisp(oggettoDGEList ,design = design,robust = F)
+  
+# fit the negative binomial GLM for each tag
+fit <-edgeR:: glmFit(y, design=design)
+
+# Definire il contrasto
+contrast <- limma::makeContrasts(contrasts= "GBM - HC",levels = colnames(design))
+
+# Test statistico
+lrt <- edgeR::glmLRT(fit,contrast = contrast)
+
+logCPM.threshold <- 3
+FDR.threshold <- 0.01
+## Estrarre l'oggetto che contiene le metriche per tutti gli n geni
+metriche <- topTags(lrt, n = nrow(counts))$table
+
+## Applicare le threshold e trovare i DEGs
+DEGs.metriche <- metriche[(metriche$logCPM > logCPM.threshold) 
+                                          & 
+                          (metriche$FDR < FDR.threshold), ]
+```
+
+
+
+
+
+```{r}
+nomiDEGS <- rownames(DEGs.metriche)
+dim(DEGs.metriche)
+```
+
+
+
+```{r}
+tep.expr.filtr.normDEGS <- normalized_counts[rownames(normalized_counts) %in%
+                                                           nomiDEGS,]
+
+tep.expr.filtr.normDEGS <- dataframe.formato.classificazione(tep.expr.filtr.normDEGS)
+
+# Esportare il dataframe
+write.csv(tep.expr.filtr.normDEGS, 
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_DEGS_normalized_counts_train.csv",
+          row.names =T )
+```
+
+
+
+
+
+### Osservazione parametri di normalizzazione
+
+Per prima cosa fare un check e controllare che i fattori di normalizzazione siano gli stessi.   
+
+```{r}
+all.equal(as.numeric(parametri.TMM$fattori.normalizzazione),oggettoDGEList$samples$norm.factors)
+```
+
+I fattori sono uguali tra le due procedure.   
+Si può procedere a salvare ed esportare i parametri.    
+
+
+```{r}
+# Salva la lista in un file
+save(parametri.TMM, file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Normalizzazione TMM/Parametri Normalizzazione/parametriTMM_GBM.RData")
+```
+
+
+
+
+
+\newpage
+## Differential co-expressed network
+
+
+
+```{r collapse=TRUE,hold=TRUE}
+DEGS.tep.expr.filtr.normalized.gbmVShc <- normalized_counts[rownames(normalized_counts) %in% rownames(DEGs.metriche),]
+
+
+
+matrix.condition1 <- DEGS.tep.expr.filtr.normalized.gbmVShc[, condition.samples]
+matrix.condition2 <- DEGS.tep.expr.filtr.normalized.gbmVShc[, healhty.samples]
+Zscores.gbmVShc <- evaluate_zscores(matrix.condition1,matrix.condition2)
+
+# Soglia
+z_threshold <- 3
+
+output.gbmVShc <- differential_coexpression_network(Zscores.gbmVShc,z_threshold)
+```
+
+
+
+
+```{r echo=FALSE}
+dim(output.gbmVShc$hubs)
+output.gbmVShc$hubs[1:10,]
+```
+
+
+```{r}
+tep.expr.filtr.normHUBS <- normalized_counts[rownames(normalized_counts) %in%
+                                                            output.gbmVShc$hubs$gene,]
+
+tep.expr.filtr.normHUBS <- dataframe.formato.classificazione(tep.expr.filtr.normHUBS)
+
+# Esportare il dataframe
+write.csv(tep.expr.filtr.normHUBS, 
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_HUBS_normalized_counts_train.csv",
+          row.names =T )
+```
+
+
+
+\newpage 
+# Metriche di centralità
+
+
+
+```{r}
+matrice.adiacenza <- output.gbmVShc$adjacency.matrix
+matrice.adiacenza <- abs(matrice.adiacenza)
+```
+
+```{r message=FALSE,warning=FALSE,include=FALSE}
+#detach("package:sna", unload = TRUE)
+detach("package:network", unload = TRUE)
+library(igraph)
+```
+
+
+
+```{r}
+# Creare il network igraph dalla matrice di adiacenza
+network <- graph_from_adjacency_matrix(matrice.adiacenza)
+
+data <- data.frame(
+  "Gene" = V(network)$name,
+  "Degree" = degree(network),
+  "betweenness_centrality"= betweenness(network),
+  "closeness_centrality"=   closeness(network),
+  "eigenvector_centrality" = eigen_centrality(network)$vector,
+  "local_clustering_coefficient" =transitivity(network, type="local")
+)
+data[is.na(data)] <- 0
+dim(data)
+```
+
+
+
+
+
+
+
+\newpage
+## Istogrammi
+
+
+### Degree
+
+```{r echo=FALSE}
+hist(data$Degree, main = "Degree")
+```
+
+
+\newpage
+### Betweenness centrality
+
+```{r echo=FALSE}
+hist(data$betweenness_centrality, main = "Betweenness centrality")
+```
+
+\newpage
+### Closeness centrality
+
+```{r echo=FALSE}
+hist(data$closeness_centrality, main = "Closeness centrality")
+```
+
+\newpage
+### Eigenvector centrality
+
+```{r echo=FALSE}
+hist(data$eigenvector_centrality, main = "Eigenvector centrality")
+```
+
+
+\newpage
+### Local clustering coefficient
+
+```{r echo=FALSE}
+hist(data$local_clustering_coefficient, main = "Local clustering coefficient")
+```
+
+
+
+
+
+\newpage
+
+##  Betweenness centrality
+
+
+```{r collapse=TRUE,hold=TRUE}
+soglia <- 0.95
+
+metrica <- data$betweenness_centrality
+q <- quantile(metrica, probs = c(soglia))
+
+# Selezionare solo i geni con eigenvector_centrality superiore al 95% percentile
+genes <- data[metrica > q,]$Gene
+
+# Estrarre solo i geni con eigenvector_centrality superiore al 95% percentile
+# dalla matrice delle conte filtrata e normalizzata
+tep.expr.filtr.normBETWEENNESS <- normalized_counts[rownames(normalized_counts) %in%
+                                                            genes,]
+dim(tep.expr.filtr.normBETWEENNESS)
+nrow(tep.expr.filtr.normBETWEENNESS) # Numero geni selezionati tramite metrica
+
+tep.expr.filtr.normBETWEENNESS <- dataframe.formato.classificazione(tep.expr.filtr.normBETWEENNESS)
+dim(tep.expr.filtr.normBETWEENNESS)
+
+# Esportare il dataframe
+write.csv(tep.expr.filtr.normBETWEENNESS, 
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_BETWEENNESS_normalized_counts_train.csv",
+          row.names =T )
+```
+
+
+\newpage
+
+## Closeness centrality
+
+### Ultimo 5% (0.95)
+```{r collapse=TRUE,hold=TRUE}
+soglia <- 0.95
+
+metrica <- data$closeness_centrality
+q <- quantile(metrica, probs = c(soglia))
+
+# Selezionare solo i geni con eigenvector_centrality superiore al 95% percentile
+genes <- data[metrica > q,]$Gene
+
+# Estrarre solo i geni con eigenvector_centrality superiore al 95% percentile
+# dalla matrice delle conte filtrata e normalizzata
+tep.expr.filtr.normCLOSENESS <- normalized_counts[rownames(normalized_counts) %in%
+                                                            genes,]
+dim(tep.expr.filtr.normCLOSENESS)
+nrow(tep.expr.filtr.normCLOSENESS) # Numero geni selezionati tramite metrica
+
+tep.expr.filtr.normCLOSENESS <- dataframe.formato.classificazione(tep.expr.filtr.normCLOSENESS)
+dim(tep.expr.filtr.normCLOSENESS)
+
+# Esportare il dataframe
+write.csv(tep.expr.filtr.normCLOSENESS, 
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_CLOSENESS_normalized_counts_train.csv",
+          row.names =T )
+```
+
+### Primo 5 % (0.05)
+
+Ha due code quindi considerare anche  il primo 5%.    
+
+
+```{r collapse=TRUE,hold=TRUE}
+soglia <- 0.05
+metrica <- data$closeness_centrality
+q <- quantile(metrica, probs = c(soglia))
+genes <- data[metrica < q,]$Gene
+tep.expr.filtr.normCLOSENESS_last5 <- normalized_counts[rownames(normalized_counts) %in%
+                                                            genes,]
+dim(tep.expr.filtr.normCLOSENESS_last5)
+nrow(tep.expr.filtr.normCLOSENESS_last5) # Numero geni selezionati tramite metrica
+tep.expr.filtr.normCLOSENESS_last5 <- dataframe.formato.classificazione(tep.expr.filtr.normCLOSENESS_last5)
+dim(tep.expr.filtr.normCLOSENESS_last5)
+# Esportare il dataframe
+write.csv(tep.expr.filtr.normCLOSENESS_last5, 
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_CLOSENESSlast5_normalized_counts_train.csv",
+          row.names =T )
+```
+
+
+
+\newpage
+## Eigenvector centrality
+
+```{r collapse=TRUE,hold=TRUE}
+soglia <- 0.95
+
+metrica <- data$eigenvector_centrality
+q <- quantile(metrica, probs = c(soglia))
+
+# Selezionare solo i geni con eigenvector_centrality superiore al 95% percentile
+genes <- data[metrica > q,]$Gene
+
+tep.expr.filtr.normEIGEN <- normalized_counts[rownames(normalized_counts) %in%
+                                                            genes,]
+dim(tep.expr.filtr.normEIGEN)
+nrow(tep.expr.filtr.normEIGEN) # Numero geni selezionati tramite metrica
+
+tep.expr.filtr.normEIGEN <- dataframe.formato.classificazione(tep.expr.filtr.normEIGEN)
+dim(tep.expr.filtr.normEIGEN)
+
+# Esportare il dataframe
+write.csv(tep.expr.filtr.normEIGEN, 
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_EIGEN_normalized_counts_train.csv",
+          row.names =T )
+```
+
+
+
+## Local Clustering coefficient
+
+
+```{r collapse=TRUE,hold=TRUE}
+soglia <- 0.95
+
+metrica <- data$local_clustering_coefficient
+q <- quantile(metrica, probs = c(soglia))
+
+# Selezionare solo i geni con eigenvector_centrality superiore al 95% percentile
+genes <- data[metrica > q,]$Gene
+
+tep.expr.filtr.normCLUSTER <- normalized_counts[rownames(normalized_counts) %in%
+                                                            genes,]
+dim(tep.expr.filtr.normCLUSTER)
+nrow(tep.expr.filtr.normCLUSTER) # Numero geni selezionati tramite metrica
+
+tep.expr.filtr.normCLUSTER <- dataframe.formato.classificazione(tep.expr.filtr.normCLUSTER)
+dim(tep.expr.filtr.normCLUSTER)
+
+# Esportare il dataframe
+write.csv(tep.expr.filtr.normCLUSTER, 
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_CLUSTER_normalized_counts_train.csv",
+          row.names =T )
+```
+
