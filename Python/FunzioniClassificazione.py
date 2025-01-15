@@ -46,7 +46,7 @@ def svc_loocv_hypKF(train_X, # Variabili esplicative di TRAIN
                                             'kernel': ['linear', 'rbf'],   # Sperimenta sia kernel lineari che RBF
                                             'gamma': ['scale', 'auto']    # Opzioni per il parametro gamma
                                         }
-                        ):
+                        ) -> dict :
     """  
     Funzione prende dati di train e test ed addestra e testa un modello SVC.  
     - 1. Performa KFold per tuning dei parametri su dati di train (Metodo GridSearchCV)
