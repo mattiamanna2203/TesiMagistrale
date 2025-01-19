@@ -24,50 +24,28 @@ header-includes:
 
 ```{r clean environment, include=FALSE}
 rm(list = ls(all.names = TRUE))
-load("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Comparazione metodologie/Data/00) Funzioni.RData")
-source("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Normalizzazione TMM/TMMbyHand.R")
+source("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/_Normalizzazione TMM exploration/funzioni.R")
+source("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/_Normalizzazione TMM exploration/TMMbyHand.R")
 ```
 
 
 
 ```{r libraries, include=FALSE,message=FALSE,warning=FALSE}
 library(edgeR)
-library(ggplot2)
-library(DESeq2) # Standardize data regarding genes.
-library(readxl) # Per importare dati da file excel
+#library(ggplot2)
+#library(DESeq2) # Standardize data regarding genes.
+#library(readxl) # Per importare dati da file excel
 
 
-library(rsample) # per dividere in train e test con stratify
-library(purrr)
-library(WGCNA)
+#library(purrr)
+#library(WGCNA)
 library(network)  # work with graphs
-library(ggnet)
-library(psych) 
+#library(ggnet)
+#library(psych) 
 library(dplyr)
-library(tibble)
+#library(tibble)
 ```
 
-
-```{r}
-dataframe.formato.classificazione <- function(dataframe){
-  
-  # Trasporre il dataframe delle conte di test, in questo modo si hanno le conte 
-  # disposte nel modo giusto per la classificazione: pazienti sulle righe e geni sulle colonne 
-  dataframe <- as.data.frame(t(dataframe))
-  
-  # Aggiungere le label y (cancer sano) alle conte 
-  dataframe <- merge(dataframe,patients.summary,by.x="row.names",
-                                    by.y="sample_name",all = FALSE)
-  
-  # Sistemare il dataframe dopo l'operazione di merge, rimettere i rownames al posto giusto
-  rownames(dataframe) <- dataframe$Row.names
-  
-  # Eliminare la colonna rownames
-  dataframe <- dataframe %>% select(-"Row.names")
-  
-  return(dataframe)
-}
-```
 
 
 
@@ -188,15 +166,15 @@ oggettoDGEList <- DGEList(counts = counts, group = group)
 
 oggettoDGEList <- calcNormFactors(oggettoDGEList, method = "TMM")
 
-# Funzione equivalente a calcNormFactors ma che permette di salvare informazioni aggiuntive sui parametri
-# ad esempio: ref column, divisore = exp(mean(log(f))) 
-parametri.TMM <- TMMbyHand(counts)
 
 # Normalizzare con CPM e le standard lib sizes
 normalized_counts <- cpm(oggettoDGEList,
                          normalized.lib.sizes = F,
                          prior.count= 1 ,
                          log = T)
+
+
+TMMparameters <- TMMbyHand(counts)
 
 normalized_counts <- as.data.frame(normalized_counts) # renderlo un dataframe
 
@@ -247,30 +225,21 @@ tep.expr.filtr.normDEGS <- dataframe.formato.classificazione(tep.expr.filtr.norm
 
 # Esportare il dataframe
 write.csv(tep.expr.filtr.normDEGS, 
-          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_DEGS_normalized_counts_train.csv",
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM only for exploration/Data/GBM_DEGS_normalized_counts_train.csv",
           row.names =T )
 ```
 
 
+### Visualize TMM parameters
 
+The most interesting parameters are the reference sample and the smoothed factor.
 
+```{r collapse=TRUE,hold=TRUE}
+TMMparameters$refColumn
 
-### Osservazione parametri di normalizzazione
-
-Per prima cosa fare un check e controllare che i fattori di normalizzazione siano gli stessi.   
-
-```{r}
-all.equal(as.numeric(parametri.TMM$fattori.normalizzazione),oggettoDGEList$samples$norm.factors)
+TMMparameters$divisore
 ```
 
-I fattori sono uguali tra le due procedure.   
-Si può procedere a salvare ed esportare i parametri.    
-
-
-```{r}
-# Salva la lista in un file
-save(parametri.TMM, file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Normalizzazione TMM/Parametri Normalizzazione/parametriTMM_GBM.RData")
-```
 
 
 
@@ -283,7 +252,6 @@ save(parametri.TMM, file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/R
 
 ```{r collapse=TRUE,hold=TRUE}
 DEGS.tep.expr.filtr.normalized.gbmVShc <- normalized_counts[rownames(normalized_counts) %in% rownames(DEGs.metriche),]
-
 
 
 matrix.condition1 <- DEGS.tep.expr.filtr.normalized.gbmVShc[, condition.samples]
@@ -299,13 +267,8 @@ output.gbmVShc <- differential_coexpression_network(Zscores.gbmVShc,z_threshold)
 
 
 
-```{r echo=FALSE}
-dim(output.gbmVShc$hubs)
-output.gbmVShc$hubs[1:10,]
-```
 
-
-```{r}
+```{r eval=FALSE}
 tep.expr.filtr.normHUBS <- normalized_counts[rownames(normalized_counts) %in%
                                                             output.gbmVShc$hubs$gene,]
 
@@ -313,7 +276,7 @@ tep.expr.filtr.normHUBS <- dataframe.formato.classificazione(tep.expr.filtr.norm
 
 # Esportare il dataframe
 write.csv(tep.expr.filtr.normHUBS, 
-          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_HUBS_normalized_counts_train.csv",
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM only for exploration/Data/GBM_HUBS_normalized_counts_train.csv",
           row.names =T )
 ```
 
@@ -343,7 +306,7 @@ network <- graph_from_adjacency_matrix(matrice.adiacenza)
 
 data <- data.frame(
   "Gene" = V(network)$name,
-  "Degree" = degree(network),
+  "degree_centrality" = degree(network),
   "betweenness_centrality"= betweenness(network),
   "closeness_centrality"=   closeness(network),
   "eigenvector_centrality" = eigen_centrality(network)$vector,
@@ -355,6 +318,9 @@ dim(data)
 
 
 
+```{r}
+save(data, file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/R/_Grafici/GBMmetrics_distribution.RData")
+```
 
 
 
@@ -366,8 +332,11 @@ dim(data)
 ### Degree
 
 ```{r echo=FALSE}
-hist(data$Degree, main = "Degree")
+hist(data$degree_centrality, main = "Degree centrality")
 ```
+
+
+
 
 
 \newpage
@@ -400,6 +369,35 @@ hist(data$local_clustering_coefficient, main = "Local clustering coefficient")
 ```
 
 
+\newpage
+
+##  Degree centrality
+
+
+```{r collapse=TRUE,hold=TRUE}
+soglia <- 0.95
+
+metrica <- data$degree_centrality
+q <- quantile(metrica, probs = c(soglia))
+
+# Selezionare solo i geni con degree_centrality superiore al 95% percentile
+genes <- data[metrica > q,]$Gene
+
+# Estrarre solo i geni con degree_centrality superiore al 95% percentile
+# dalla matrice delle conte filtrata e normalizzata
+tep.expr.filtr.normDEGREE <- normalized_counts[rownames(normalized_counts) %in%
+                                                            genes,]
+dim(tep.expr.filtr.normDEGREE)
+nrow(tep.expr.filtr.normDEGREE) # Numero geni selezionati tramite metrica
+
+tep.expr.filtr.normDEGREE <- dataframe.formato.classificazione(tep.expr.filtr.normDEGREE)
+dim(tep.expr.filtr.normDEGREE)
+
+# Esportare il dataframe
+write.csv(tep.expr.filtr.normDEGREE, 
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM only for exploration/Data/GBM_DEGREE_normalized_counts_train.csv",
+          row.names =T )
+```
 
 
 
@@ -429,7 +427,7 @@ dim(tep.expr.filtr.normBETWEENNESS)
 
 # Esportare il dataframe
 write.csv(tep.expr.filtr.normBETWEENNESS, 
-          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_BETWEENNESS_normalized_counts_train.csv",
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM only for exploration/Data/GBM_BETWEENNESS_normalized_counts_train.csv",
           row.names =T )
 ```
 
@@ -460,7 +458,7 @@ dim(tep.expr.filtr.normCLOSENESS)
 
 # Esportare il dataframe
 write.csv(tep.expr.filtr.normCLOSENESS, 
-          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_CLOSENESS_normalized_counts_train.csv",
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM only for exploration/Data/GBM_CLOSENESS_normalized_counts_train.csv",
           row.names =T )
 ```
 
@@ -482,7 +480,7 @@ tep.expr.filtr.normCLOSENESS_last5 <- dataframe.formato.classificazione(tep.expr
 dim(tep.expr.filtr.normCLOSENESS_last5)
 # Esportare il dataframe
 write.csv(tep.expr.filtr.normCLOSENESS_last5, 
-          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_CLOSENESSlast5_normalized_counts_train.csv",
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM only for exploration/Data/GBM_CLOSENESSlast5_normalized_counts_train.csv",
           row.names =T )
 ```
 
@@ -510,7 +508,7 @@ dim(tep.expr.filtr.normEIGEN)
 
 # Esportare il dataframe
 write.csv(tep.expr.filtr.normEIGEN, 
-          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_EIGEN_normalized_counts_train.csv",
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM only for exploration/Data/GBM_EIGEN_normalized_counts_train.csv",
           row.names =T )
 ```
 
@@ -538,7 +536,15 @@ dim(tep.expr.filtr.normCLUSTER)
 
 # Esportare il dataframe
 write.csv(tep.expr.filtr.normCLUSTER, 
-          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBM_CLUSTER_normalized_counts_train.csv",
+          file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM only for exploration/Data/GBM_CLUSTER_normalized_counts_train.csv",
           row.names =T )
 ```
+
+
+
+
+
+
+
+
 
