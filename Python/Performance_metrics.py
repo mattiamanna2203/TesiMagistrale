@@ -1,6 +1,5 @@
 import numpy as np
 from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, recall_score,precision_score
-from sklearn.metrics import classification_report
 
 def metrics_binary(test_y, y_pred) -> dict: 
    """Ottenere le metriche  dalla confusion matrix preferito.
@@ -27,8 +26,6 @@ def metrics_binary(test_y, y_pred) -> dict:
    # Calcolare la specificità
    specificity = TN / (TN + FP)
 
-   # Per un controllo aggiuntivo
-   report_scikit_learn = classification_report(test_y, y_pred,output_dict=True)
    metrics_scikit_learn= {
         'Accuracy': accuracy_score(test_y, y_pred),
         'Precision': precision_score(test_y, y_pred),
