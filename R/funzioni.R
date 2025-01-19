@@ -2,6 +2,30 @@ library(edgeR)
 library(pryr) # per utilizzare unenclose() -> funzioni non utilizzato l'environment generale
 
 
+
+dataframe.formato.classificazione <- function(dataframe){
+  
+  # Trasporre il dataframe delle conte di test, in questo modo si hanno le conte 
+  # disposte nel modo giusto per la classificazione: pazienti sulle righe e geni sulle colonne 
+  dataframe <- as.data.frame(t(dataframe))
+  
+  # Aggiungere le label y (cancer sano) alle conte 
+  dataframe <- merge(dataframe,patients.summary,by.x="row.names",
+                     by.y="sample_name",all = FALSE)
+  
+  # Sistemare il dataframe dopo l'operazione di merge, rimettere i rownames al posto giusto
+  rownames(dataframe) <- dataframe$Row.names
+  
+  # Eliminare la colonna rownames
+  dataframe <- dataframe %>% select(-"Row.names")
+  
+  return(dataframe)
+}
+
+
+
+
+
 #correlation with method Pearson
 corr <- unenclose(function(dat){
   cor(t(dat),method = "pearson")
