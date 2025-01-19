@@ -1,0 +1,568 @@
+---
+title: "Nuovi dati con normalizzazione TMM"
+author: "Mattia Manna"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+    number_sections: true 
+header-includes:
+- \usepackage{bbold}
+- \usepackage{mdframed, xcolor}
+- \mdfsetup{frametitlealignment=\center}
+- \usepackage{graphicx}
+---
+
+
+\pagenumbering{Roman}
+\renewcommand*\contentsname{Indice}
+\tableofcontents
+
+
+\newpage
+\pagenumbering{arabic}
+
+```{r clean environment, include=FALSE}
+rm(list = ls(all.names = TRUE))
+#load("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Comparazione metodologie/Data/00) Funzioni.RData")
+source("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Normalizzazione TMM/TMMbyHand.R")
+```
+
+
+
+```{r libraries, include=FALSE,message=FALSE,warning=FALSE}
+library(edgeR)
+library(ggplot2)
+library(DESeq2) # Standardize data regarding genes.
+library(readxl) # Per importare dati da file excel
+
+library(readr)
+library(rsample) # per dividere in train e test con stratify
+library(purrr)
+library(WGCNA)
+library(network)  # work with graphs
+library(ggnet)
+library(psych) 
+library(dplyr)
+library(tibble)
+```
+
+
+
+
+# Importazione dati
+
+## Download dati
+
+I dati sono stati scaricati dal [Gene Expression Omnibus](https://www.ncbi.nlm.nih.gov/geo/), https://www.ncbi.nlm.nih.gov/geo/ , in particolare dalla pagina   [**GSE183635**](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE183635), https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE183635.    
+ e salvati localmente.   
+
+I dati sono stati trovati leggendo l'articolo: [**Immunological Signatures for Early Detection of Human Head and Neck Squamous Cell Carcinoma through RNA Transcriptome Analysis of Blood Platelets**](https://www.mdpi.com/2072-6694/16/13/2399), 
+https://www.mdpi.com/2072-6694/16/13/2399.    
+
+
+### Scaricare informazioni sui pazienti
+
+```{r eval=FALSE}
+library(GEOquery)
+library(readr)
+# Scaricare informazioni riguardo ai geni
+getGEOSuppFiles("GSE183635") # Check for available supplementary files
+
+# Scaricare informazioni riguardanti i samples
+patients <- getGEO('GSE183635',GSEMatrix=T)
+patients<- pData(phenoData(patients[[1]]))
+write_csv(patients,file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Risoluzione Data Leakage/Dati/patients.csv")
+```
+
+
+```{r}
+patients <- read_csv("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Risoluzione Data Leakage/Dati/patients.csv")
+```
+
+```{r}
+patients_train <- read.csv("~/Desktop/Università/Magistrale/Tesi/R/GSE68086/patients.csv", row.names=1, sep=";")
+dim(patients)
+```
+
+
+
+Controllare che i pazienti siano diversi nei due dataset.       
+
+```{r}
+IDs <- patients$geo_accession
+IDs_train <- patients_train$geo_accession
+intersect(IDs,IDs_train)
+```
+
+I pazienti sono totalmente differenti.
+
+```{r collapse=TRUE,hold=TRUE}
+table(patients$status)
+
+table(patients_train$status)
+```
+
+Anche le date confermano che si tratta di sample diversi.   
+
+
+
+
+### Importare conte dei transcrittomi
+
+```{r}
+load("~/Desktop/Università/Magistrale/Tesi/R/Risoluzione Data Leakage/Dati/GSE183635_TEP_Count_Matrix.RData")
+
+# Trasformare la count matrix in un dataframe
+counts <- as.data.frame(TEP_Count_Matrix)
+load("~/Desktop/Università/Magistrale/Tesi/R/Risoluzione Data Leakage/Dati/GSE183635_TEP_Count_Matrix_TSOO.RData")
+
+# Trasformare la count matrix TS00 in un dataframe
+countsTS00 <- as.data.frame(TEP_Count_Matrix_TSOO)
+
+# Rimuovere le matrici
+rm(TEP_Count_Matrix_TSOO,TEP_Count_Matrix)
+```
+
+
+\newpage
+
+## Cleaning dati
+
+### Ricodifica nome pazienti del dataset delle conte
+
+```{r}
+colnames(counts) <- gsub("^[0-9]+-", "", colnames(counts))
+```
+
+
+
+### Estrazione dei pazienti per ogni patologia
+
+Estrarre le patologie di interesse.  
+Che si ricordi essere:
+\begin{itemize}
+  \item BRCA, breast cancer
+  \item CRC, colorectal cancer
+  \item GBM, glioblastoma multiforme
+  \item HBC, hepatobiliarity
+  \item NSCLC, non small cell lung cancer
+  \item PAAD, Pancreatic adenocarcinoma
+\end{itemize}
+
+Visualizzare i tipi di cancro disponibili in questo database.   
+
+```{r}
+names(table(patients$`patient group:ch1`))
+```
+Sono tutti disponibili tranne l'HBC.    
+
+Si estraggano.    
+
+
+```{r}
+# BRCA, breast cancer
+BRCA <- patients[patients$`patient group:ch1`=="Breast Cancer",]
+
+# CRC, colorectal cancer
+CRC <- patients[patients$`patient group:ch1`=="Colorectal Cancer",]
+
+Glioma <- patients[patients$`patient group:ch1`=="Glioma",]
+
+# GBM, glioblastoma multiforme
+GBM <- Glioma[grepl("\\bGBM\\b", Glioma$source_name_ch1), ] 
+
+# NSCLC, non small cell lung cancer
+NSCLC <- patients[patients$`patient group:ch1`=="Non-Small-Cell Lung Cancer",]
+NSCLC <- NSCLC[grepl("\\bNSCLC\\b", NSCLC$title), ] 
+
+# PAAD, Pancreatic adenocarcinoma
+PAAD <- patients[patients$`patient group:ch1`=="Pancreatic Cancer",]
+
+# Sani
+HC <- patients[patients$`patient group:ch1`=="Asymptomatic Controls",]
+
+# Metterli tutti insieme PANCANCER
+ALL <-  rbind(BRCA,CRC,GBM,NSCLC,PAAD,HC)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+\newpage
+# Normalizzazione dati
+
+
+
+
+```{r warning=FALSE, eval=FALSE,include=FALSE}
+# Inizializzare il dataset con la prima iterazione, in questo modo sarà più facile aggiungere i risultati
+oggettoDGEList <- DGEList(counts = counts[,1,drop = FALSE])
+
+
+normalized_counts.test <- cpm(oggettoDGEList,normalized.lib.sizes = F,prior.count= 1 ,log = T)
+normalized_counts.test <- as.data.frame(normalized_counts.test)
+
+for (i in 2:ncol(counts)){
+
+  oggettoDGEList <- DGEList(counts = counts[,i,drop = FALSE])
+  
+  ## drop = FALSE permette di continuare a considerare l'oggetto come un dataframe e quindi mantenere i nomi di riga
+  
+  # Normalizzare la iesima riga di test
+  normalized_counts.test_row <- cpm(oggettoDGEList,normalized.lib.sizes = F,prior.count= 1 ,log = T)
+  
+  # Rendere la iesima riga normalizzata un dataframe
+  normalized_counts.test_row <- as.data.frame(normalized_counts.test_row)
+  
+  # Salvare la iesima riga
+  normalized_counts.test <- cbind(normalized_counts.test, normalized_counts.test_row) 
+  
+}
+counts <- normalized_counts.test
+counts[1:5,1:5]
+```
+
+
+
+
+# Preparare dati per esportazione
+
+```{r}
+conditions <- ALL[,c("title","patient group:ch1")]
+conditions[1:5,]
+```
+
+
+```{r}
+dataframe.formato.classificazione <- function(dataframe){
+  
+  # Trasporre il dataframe delle conte di test, in questo modo si hanno le conte 
+  # disposte nel modo giusto per la classificazione: pazienti sulle righe e geni sulle colonne 
+  dataframe <- as.data.frame(t(dataframe))
+  
+  # Aggiungere le label y (cancer sano) alle conte 
+  dataframe <- merge(dataframe,conditions,by.x="row.names",
+                                    by.y="title",all = FALSE)
+  #print(dataframe)
+  # Sistemare il dataframe dopo l'operazione di merge, rimettere i rownames al posto giusto
+  rownames(dataframe) <- dataframe$Row.names
+
+
+  
+  # Eliminare la colonna rownames
+  dataframe <- dataframe %>% dplyr::select(-"Row.names")
+  dataframe$cancer.type.ch1 <- dataframe$`patient group:ch1`
+  dataframe <- dataframe %>% dplyr::select(-"patient group:ch1")
+  
+  return(dataframe)
+}
+```
+
+
+
+\newpage
+## Creazione samples 
+
+
+
+
+
+### GBM 
+
+ 
+```{r}
+# Prendere il nome pazienti GBM
+pazienti.GBM <- GBM$title
+
+# Prendere il nome dei pazienti SANI
+pazienti.sani <- HC$title#[1:57]
+
+# Estrarre dalle conte i pazienti GBM e sani
+countsGBM <- counts[,colnames(counts) %in% c(pazienti.GBM,pazienti.sani)]
+dim(countsGBM)
+```
+
+
+
+
+
+
+
+
+```{r}
+# Mettere nel formato adatto alla classificazione le conte
+countsGBM <- dataframe.formato.classificazione(countsGBM)
+
+# Estrarsi il vettore dei vecchi nomi
+nuovi.nomi.patologia <- countsGBM$cancer.type.ch1
+
+# Sostituire Glioma con GBM
+nuovi.nomi.patologia <- gsub("Glioma", "GBM", nuovi.nomi.patologia)
+
+# Sostituire Asymptomatic Controls con  HC  
+nuovi.nomi.patologia <- gsub("Asymptomatic Controls", "HC", nuovi.nomi.patologia)
+
+# Assegnare la nuova nomenclatura
+countsGBM$cancer.type.ch1 <- nuovi.nomi.patologia
+
+table(countsGBM$cancer.type.ch1)
+
+#write.csv(countsGBM,file="/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/GBMtest.csv")
+```
+
+
+
+
+
+
+
+
+\newpage
+
+### BRCA 
+
+ 
+```{r}
+# Prendere il nome pazienti GBM
+pazienti.BRCA <- BRCA$title
+
+# Prendere il nome dei pazienti SANI
+pazienti.sani <- HC$title#[1:77]
+
+# Estrarre dalle conte i pazienti GBM e sani
+countsBRCA <- counts[,colnames(counts) %in% c(pazienti.BRCA,pazienti.sani)]
+dim(countsBRCA)
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+# Mettere nel formato adatto alla classificazione le conte
+countsBRCA <- dataframe.formato.classificazione(countsBRCA)
+dim(countsBRCA)
+# Estrarsi il vettore dei vecchi nomi
+nuovi.nomi.patologia <- countsBRCA$cancer.type.ch1
+
+# Sostituire Glioma con GBM
+nuovi.nomi.patologia <- gsub("Breast Cancer", "Breast", nuovi.nomi.patologia)
+
+# Sostituire Asymptomatic Controls con  HC  
+nuovi.nomi.patologia <- gsub("Asymptomatic Controls", "HC", nuovi.nomi.patologia)
+
+# Assegnare la nuova nomenclatura
+countsBRCA$cancer.type.ch1 <- nuovi.nomi.patologia
+
+table(countsBRCA$cancer.type.ch1)
+
+#write.csv(countsBRCA,file="/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/BRCAtest.csv")
+```
+
+
+\newpage 
+
+### CRC
+
+```{r}
+# Prendere il nome pazienti GBM
+pazienti.CRC <- CRC$title
+
+# Prendere il nome dei pazienti SANI
+pazienti.sani <- HC$title#[1:44]
+
+# Estrarre dalle conte i pazienti GBM e sani
+countsCRC <- counts[,colnames(counts) %in% c(pazienti.CRC,pazienti.sani)]
+dim(countsCRC)
+```
+
+
+
+
+```{r}
+# Mettere nel formato adatto alla classificazione le conte
+countsCRC <- dataframe.formato.classificazione(countsCRC)
+dim(countsCRC)
+# Estrarsi il vettore dei vecchi nomi
+nuovi.nomi.patologia <- countsCRC$cancer.type.ch1
+
+# Sostituire Glioma con GBM
+nuovi.nomi.patologia <- gsub("Colorectal Cancer", "CRC", nuovi.nomi.patologia)
+
+# Sostituire Asymptomatic Controls con  HC  
+nuovi.nomi.patologia <- gsub("Asymptomatic Controls", "HC", nuovi.nomi.patologia)
+
+# Assegnare la nuova nomenclatura
+countsCRC$cancer.type.ch1 <- nuovi.nomi.patologia
+
+table(countsCRC$cancer.type.ch1)
+
+#write.csv(countsCRC,file="/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/CRCtest.csv")
+```
+
+
+\newpage 
+
+### NSCLC
+
+```{r}
+# Prendere il nome pazienti GBM
+pazienti.NSCLC <- NSCLC$title#[1:256]
+
+# Prendere il nome dei pazienti SANI
+pazienti.sani <- HC$title#[1:44]
+
+# Estrarre dalle conte i pazienti GBM e sani
+countsNSCLC <- counts[,colnames(counts) %in% c(pazienti.NSCLC,pazienti.sani)]
+dim(countsNSCLC)
+```
+
+
+
+
+```{r}
+# Mettere nel formato adatto alla classificazione le conte
+countsNSCLC <- dataframe.formato.classificazione(countsNSCLC)
+dim(countsNSCLC)
+# Estrarsi il vettore dei vecchi nomi
+nuovi.nomi.patologia <- countsNSCLC$cancer.type.ch1
+
+# Sostituire Glioma con GBM
+nuovi.nomi.patologia <- gsub("Non-Small-Cell Lung Cancer", "Lung", nuovi.nomi.patologia)
+
+# Sostituire Asymptomatic Controls con  HC  
+nuovi.nomi.patologia <- gsub("Asymptomatic Controls", "HC", nuovi.nomi.patologia)
+
+# Assegnare la nuova nomenclatura
+countsNSCLC$cancer.type.ch1 <- nuovi.nomi.patologia
+
+table(countsNSCLC$cancer.type.ch1)
+
+#write.csv(countsNSCLC,file="/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/NSCLCtest.csv")
+```
+
+
+
+
+
+\newpage 
+
+### PAAD
+
+
+```{r}
+# Prendere il nome pazienti GBM
+pazienti.PAAD <- PAAD$title
+
+#set.seed(123) # Per rendere il risultato riproducibile
+numeri_casuali <- sample(1:283, 86, replace = TRUE)
+
+# Prendere il nome dei pazienti SANI
+#pazienti.sani <- HC$title[1:86]
+pazienti.sani <- HC$title#[numeri_casuali]
+
+# Estrarre dalle conte i pazienti GBM e sani
+countsPAAD <- counts[,colnames(counts) %in% c(pazienti.PAAD,pazienti.sani)]
+dim(countsPAAD)
+```
+
+
+
+
+
+
+```{r}
+# Mettere nel formato adatto alla classificazione le conte
+countsPAAD <- dataframe.formato.classificazione(countsPAAD)
+dim(countsPAAD)
+# Estrarsi il vettore dei vecchi nomi
+nuovi.nomi.patologia <- countsPAAD$cancer.type.ch1
+
+# Sostituire Glioma con GBM
+nuovi.nomi.patologia <- gsub("Pancreatic Cancer", "Pancreas", nuovi.nomi.patologia)
+
+# Sostituire Asymptomatic Controls con  HC  
+nuovi.nomi.patologia <- gsub("Asymptomatic Controls", "HC", nuovi.nomi.patologia)
+
+# Assegnare la nuova nomenclatura
+countsPAAD$cancer.type.ch1 <- nuovi.nomi.patologia
+
+table(countsPAAD$cancer.type.ch1)
+
+#write.csv(countsPAAD,file="/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/PAADtest.csv")
+```
+
+\newpage
+
+### PANCANCER
+
+
+```{r}
+# Prendere il nome pazienti GBM
+#pazienti.PANCANCER <- c(BRCA$title,CRC$title,GBM$title,NSCLC$title,PAAD$title)
+
+pazienti.PANCANCER <- c(BRCA$title#[1:53]
+                        ,CRC$title#[1:53]
+                        ,GBM$title#[1:53]
+                        ,NSCLC$title#[1:53]
+                        ,PAAD$title#[1:53]
+                        )
+
+# Prendere il nome dei pazienti SANI
+pazienti.sani <- HC$title#[1:256]
+
+# Estrarre dalle conte i pazienti GBM e sani
+countsPANCANCER <- counts[,colnames(counts) %in% c(pazienti.PANCANCER,pazienti.sani)]
+dim(countsPANCANCER)
+```
+
+
+
+
+
+```{r}
+# Mettere nel formato adatto alla classificazione le conte
+countsPANCANCER <- dataframe.formato.classificazione(countsPANCANCER)
+dim(countsPANCANCER)
+# Estrarsi il vettore dei vecchi nomi
+nuovi.nomi.patologia <- countsPANCANCER$cancer.type.ch1
+
+# Sostituire Glioma con GBM
+nuovi.nomi.patologia <- gsub("Breast Cancer", "Cancer", nuovi.nomi.patologia)
+nuovi.nomi.patologia <- gsub("Colorectal Cancer", "Cancer", nuovi.nomi.patologia)
+nuovi.nomi.patologia <- gsub("Glioma", "Cancer", nuovi.nomi.patologia)
+nuovi.nomi.patologia <- gsub("Non-Small-Cell Lung Cancer", "Cancer", nuovi.nomi.patologia)
+nuovi.nomi.patologia <- gsub("Pancreatic Cancer", "Cancer", nuovi.nomi.patologia)
+
+# Sostituire Asymptomatic Controls con  HC  
+nuovi.nomi.patologia <- gsub("Asymptomatic Controls", "HC", nuovi.nomi.patologia)
+
+# Assegnare la nuova nomenclatura
+countsPANCANCER$cancer.type.ch1 <- nuovi.nomi.patologia
+
+table(countsPANCANCER$cancer.type.ch1)
+
+#write.csv(countsPANCANCER,file="/Users/mattia/Desktop/Università/Magistrale/Tesi/Python TMM/Data/PANCANCERtest.csv")
+```
+
+
+
+
+  
+
+
+

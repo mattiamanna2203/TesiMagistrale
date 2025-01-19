@@ -1,0 +1,437 @@
+---
+title: "GSE156902"
+author: "Mattia Manna"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+    number_sections: true 
+header-includes:
+- \usepackage{bbold}
+- \usepackage{mdframed, xcolor}
+- \mdfsetup{frametitlealignment=\center}
+- \usepackage{graphicx}
+---
+
+
+\pagenumbering{Roman}
+\renewcommand*\contentsname{Indice}
+\tableofcontents
+
+
+\newpage
+\pagenumbering{arabic}
+
+```{r clean environment, include=FALSE}
+rm(list = ls(all.names = TRUE))
+#load("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Comparazione metodologie/Data/00) Funzioni.RData")
+```
+
+
+
+```{r libraries, include=FALSE,message=FALSE,warning=FALSE}
+library(edgeR)
+library(ggplot2)
+library(DESeq2) # Standardize data regarding genes.
+library(readxl) # Per importare dati da file excel
+
+library(readr)
+library(rsample) # per dividere in train e test con stratify
+library(purrr)
+library(WGCNA)
+library(network)  # work with graphs
+library(ggnet)
+library(psych) 
+library(dplyr)
+library(tibble)
+```
+
+
+
+# Importare  dati
+
+
+## GSE68086 (Dataset BestTal 285 pazienti 6 tipi tumori + sani) TRAIN
+
+### Importare dati sui pazienti GSE68086
+
+```{r}
+patientsGSE68086 <- read.csv("~/Desktop/Università/Magistrale/Tesi/R/GSE68086/patients.csv", row.names=1, sep=";")
+dim(patientsGSE68086)
+```
+
+### Importare dati sulle conte GSE68086
+
+```{r}
+tep.exprGSE68086 <- read.delim("~/Desktop/Università/Magistrale/Tesi/R/GSE68086/GSE68086_TEP_data_matrix.txt", row.names=1)
+dim(tep.exprGSE68086)
+```
+
+```{r}
+colnames(patientsGSE68086)
+```
+
+
+\newpage
+## GSE183635 ( 2000 e oltre pazienti 18 tipi tumori + sani ) TEST
+
+### Importare dati sui pazienti GSE183635
+
+```{r}
+patientsGSE183635 <- read_csv("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/Risoluzione Data Leakage/Dati/patients.csv")
+dim(patientsGSE183635)
+```
+
+
+
+### Importare dati sulle conte GSE183635
+
+```{r}
+load("~/Desktop/Università/Magistrale/Tesi/R/Risoluzione Data Leakage/Dati/GSE183635_TEP_Count_Matrix.RData")
+tep.exprGSE183635 <- as.data.frame(TEP_Count_Matrix)
+rm(TEP_Count_Matrix)
+```
+
+
+
+\newpage
+## GSE156902 (GBM nel tempo) TEST
+
+### Importare dati sui pazienti GSE156902
+
+```{r eval=F}
+library(GEOquery)
+library(readr)
+
+dataset <- "GSE156902"
+
+# Scaricare informazioni riguardo ai geni
+getGEOSuppFiles(dataset) # Check for available supplementary files
+
+# Scaricare informazioni riguardanti i samples
+patients <- getGEO(dataset,GSEMatrix=T)
+patients<- pData(phenoData(patients[[1]]))
+#write_csv(patients,file = "/Users/mattia/Desktop/Università/Magistrale/Tesi/R/GSE156902/patientGSE156902s.csv")
+```
+
+
+```{r}
+
+#p <- pData(phenoData(patients$`GSE156902-GPL20301_series_matrix.txt.gz`))
+
+#pp <- experimentData(patients$`GSE156902-GPL20301_series_matrix.txt.gz`)
+```
+
+
+
+```{r}
+patientsGSE156902 <- read_csv("/Users/mattia/Desktop/Università/Magistrale/Tesi/R/GSE156902/patientGSE156902s.csv")
+dim(patientsGSE156902)
+```
+
+
+```{r}
+table(patientsGSE156902$`group:ch1`)
+```
+
+
+```{r collapse=TRUE,hold=TRUE}
+library(dplyr)
+library(stringr)
+
+patientsGSE156902_GBM <- patientsGSE156902[patientsGSE156902$`group:ch1` == "GBM",]
+nrow(patientsGSE156902_GBM)
+
+# Filtrare le righe in cui X contiene "t0"
+t0 <- patientsGSE156902_GBM %>% filter(!str_detect(title, "t1|t2|t3|t4|t5|t6|t7|t8|t9|t10"))
+nrow(t0)
+
+t1 <- patientsGSE156902_GBM %>% filter(str_detect(title, "t1"))
+nrow(t1)
+
+t2 <- patientsGSE156902_GBM %>% filter(str_detect(title, "t2"))
+nrow(t2)
+
+t3 <- patientsGSE156902_GBM %>% filter(str_detect(title, "t3"))
+nrow(t3)
+
+t4 <- patientsGSE156902_GBM %>% filter(str_detect(title, "t4"))
+nrow(t4)
+
+t5 <- patientsGSE156902_GBM %>% filter(str_detect(title, "t5"))
+nrow(t5)
+
+t6 <- patientsGSE156902_GBM %>% filter(str_detect(title, "t6"))
+nrow(t6)
+
+t7 <- patientsGSE156902_GBM %>% filter(str_detect(title, "t7"))
+nrow(t7)
+
+t8 <- patientsGSE156902_GBM %>% filter(str_detect(title, "t8"))
+nrow(t8)
+
+t9 <- patientsGSE156902_GBM %>% filter(str_detect(title, "t9"))
+nrow(t9)
+
+t10 <- patientsGSE156902_GBM %>% filter(str_detect(title, "t10"))
+nrow(t10)
+```
+
+
+```{r}
+nrow(t0) +nrow(t1) + nrow(t2) + nrow(t3) + nrow(t4) + nrow(t5) + nrow(t6) + nrow(t7) + nrow(t8) + nrow(t9) + nrow(t10)
+```
+
+
+
+
+
+
+
+
+### Importare dati sulle conte GSE156902
+
+```{r}
+load("~/Desktop/Università/Magistrale/Tesi/R/GSE156902/GSE156902_TEP_Count_Matrix.RData")
+tep.exprGSE156902.raw <- as.data.frame(dgeIncludedSamples$raw.counts) 
+tep.exprGSE156902 <- as.data.frame(dgeIncludedSamples$counts)
+dim(tep.exprGSE156902)
+rm(dgeIncludedSamples)
+```
+
+\newpage 
+
+# Controllo indipendenza pazienti tra dataset 
+
+## GSE68086 vs GSE156902
+
+```{r}
+intersect(patientsGSE68086$geo_accession,patientsGSE183635$geo_accession)
+```
+
+Nessun paziente in comune. Per sicurezza si controlli la submission date.   
+
+
+
+```{r collapse=TRUE,hold=TRUE}
+table(patientsGSE68086$submission_date)
+
+table(patientsGSE156902$submission_date)
+
+table(patientsGSE183635$submission_date)
+```
+Diversi.    
+
+
+## GSE183635 vs GSE156902
+
+```{r}
+intersect(patientsGSE183635$geo_accession,patientsGSE156902$geo_accession)
+```
+
+
+
+
+## GSE68086 vs GSE183635
+
+
+```{r}
+intersect(patientsGSE68086$geo_accession,patientsGSE183635$geo_accession)
+```
+
+\newpage
+
+
+```{r include=FALSE}
+# rimuovere le conte dei dataset ora inutili
+rm(patientsGSE183635,patientsGSE68086,tep.exprGSE68086,tep.exprGSE183635)
+```
+
+\newpage
+# Analisi dati  preliminare
+
+
+## Ricodificare 
+
+
+Modificare i nomi dei dataset dei patients e delle conte per renderli più facili da utilizzare.   
+
+
+```{r}
+patients <- patientsGSE156902
+counts <- tep.exprGSE156902.raw
+rm(patientsGSE156902,tep.exprGSE156902,tep.exprGSE156902.raw)
+```
+
+Modificare i nomi dei pazienti/sample renderli univoci per i due dataset (count e samples).   
+
+
+```{r}
+patients$name <- sub(".*\\[(.*?)\\].*", "\\1", patients$title)
+
+colnames(counts) <- sub("^[^-]*-(.*)", "\\1", colnames(counts))
+```
+
+
+
+
+
+
+## Osservare le patologie per pazienti ed estrarre GBM e HC
+
+
+```{r}
+table(patients$`group:ch1`)
+```
+
+
+
+
+
+
+```{r}
+patientsGBM <- patients[patients$`group:ch1` == "GBM",]
+patientsGBM <- patientsGBM %>% filter(!str_detect(title, "t1|t2|t3|t4|t5|t6|t7|t8|t9|t10"))
+
+patientsHC <- patients[patients$`group:ch1` == "asymptomaticControls",]
+
+patients.names.GBM <- patientsGBM$name
+patients.names.HC <-  patientsHC$name
+```
+
+
+
+```{r}
+countsGBM <- counts[,colnames(counts) %in% patients.names.GBM]
+countsHC <- counts[,colnames(counts) %in% patients.names.HC]
+```
+
+
+
+
+```{r collapse=TRUE,hold=TRUE}
+# Per risolvere il problema colnames(counts[colnames(counts) == "Maas.GBM.NICT.035G.TR2170"])
+# runnare due volte
+colnames(counts[colnames(counts) == "Maas-GBM-NICT-035G-TR2170"])
+counts <-  counts[,colnames(counts) %in% c(patients.names.HC,patients.names.GBM)]
+
+dim(counts)
+colnames(counts[colnames(counts) == "Maas-GBM-NICT-035G-TR2170"])
+counts <-  counts[,colnames(counts) %in% c(patients.names.HC,patients.names.GBM)]
+dim(counts)
+```
+
+\newpage
+# Normalizzare
+
+## Normalizzazione CPM
+```{r}
+# Inizializzare il dataset con la prima iterazione, in questo modo sarà più facile aggiungere i risultati
+oggettoDGEList <- DGEList(counts = counts[,1,drop = FALSE]) 
+normalized_counts.test <- cpm(oggettoDGEList,normalized.lib.sizes = F,prior.count= 1 ,log = T)
+normalized_counts.test <- as.data.frame(normalized_counts.test)
+
+for (i in 2:ncol(counts)){
+  # Estrarre la iesima riga di TEST e farne un oggetto edgeR
+  oggettoDGEList <- DGEList(counts = counts[,i,drop = FALSE]) 
+  ## drop = FALSE permette di continuare a considerare l'oggetto come un dataframe e quindi mantenere i nomi di riga
+  
+  # Normalizzare la iesima riga di test
+  normalized_counts.test_row <- cpm(oggettoDGEList,normalized.lib.sizes = F,prior.count= 1 ,log = T)
+  
+  # Rendere la iesima riga normalizzata un dataframe
+  normalized_counts.test_row <- as.data.frame(normalized_counts.test_row)
+  
+  # Salvare la iesima riga
+  normalized_counts.test <- cbind(normalized_counts.test, normalized_counts.test_row) 
+  
+}
+counts <- normalized_counts.test
+counts[1:5,1:5]
+```
+
+
+
+\newpage 
+# Creazione dati di TEST
+
+
+```{r}
+dataframe.formato.classificazione <- function(dataframe){
+  conditions <- patients[,c("name","group:ch1")]
+  
+  
+  # Trasporre il dataframe delle conte di test, in questo modo si hanno le conte 
+  # disposte nel modo giusto per la classificazione: pazienti sulle righe e geni sulle colonne 
+  dataframe <- as.data.frame(t(dataframe))
+  
+  # Aggiungere le label y (cancer sano) alle conte 
+  dataframe <- merge(dataframe,conditions,by.x="row.names",
+                                    by.y="name",all = FALSE)
+  
+  # Sistemare il dataframe dopo l'operazione di merge, rimettere i rownames al posto giusto
+  rownames(dataframe) <- dataframe$Row.names
+  
+  # Eliminare la colonna rownames
+  dataframe <- dataframe %>% select(-"Row.names")
+  dataframe$cancer.type.ch1 <- dataframe$`group:ch1`
+  dataframe <- dataframe %>% select(-"group:ch1")
+  
+  return(dataframe)
+}
+```
+
+
+
+
+```{r}
+# Mettere nel formato adatto alla classificazione le conte
+countsGBM <- dataframe.formato.classificazione(counts)
+
+# Estrarsi il vettore dei vecchi nomi
+nuovi.nomi.patologia <- countsGBM$cancer.type.ch1
+
+# Sostituire Glioma con GBM
+#nuovi.nomi.patologia <- gsub("Glioma", "GBM", nuovi.nomi.patologia)
+
+# Sostituire Asymptomatic Controls con  HC  
+nuovi.nomi.patologia <- gsub("asymptomaticControls", "HC", nuovi.nomi.patologia)
+
+# Assegnare la nuova nomenclatura
+countsGBM$cancer.type.ch1 <- nuovi.nomi.patologia
+
+table(countsGBM$cancer.type.ch1)
+
+#write.csv(countsGBM,file="/Users/mattia/Desktop/Università/Magistrale/Tesi/Python Data Leakage GSE183635/Data/GBM_new_test.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
