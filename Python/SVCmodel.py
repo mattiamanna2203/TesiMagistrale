@@ -1,3 +1,12 @@
+import pandas as pd 
+from sklearn.model_selection import LeaveOneOut
+from sklearn.svm import SVC
+
+import sys 
+#sys.path.append('...') # Add a path for the Perfomance_metrics file
+from Perfomance_metrics import metrics_binary
+
+
 # MODELLO SVC:  traning con LeaveOneOut, no hypertuning
 def svc_loocv(train_X, # Variabili esplicative di TRAIN 
               train_y, # Variabili target di TRAIN 
