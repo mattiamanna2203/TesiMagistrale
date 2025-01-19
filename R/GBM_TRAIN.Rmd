@@ -194,7 +194,7 @@ parametri.TMM <- TMMbyHand(counts)
 
 # Normalizzare con CPM e le standard lib sizes
 normalized_counts <- cpm(oggettoDGEList,
-                         normalized.lib.sizes = T,
+                         normalized.lib.sizes = F,
                          prior.count= 1 ,
                          log = T)
 
