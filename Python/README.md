@@ -1,2 +1,2 @@
-- **FunzioniClassificazione.py** contains the function to train and test the SVC model, also import functions from **FunzioniPerformance.py** in order to evaluate the performances of the model.
-- **FunzioniPerformance.py** contains various function  to evaluate  performances of  models.
+- **SVCmodel.py** contains the function to train and test the SVC model, also import functions from **FunzioniPerformance.py** in order to evaluate the performances of the model.
+- **Performance_metrics.py** contains various function  to evaluate  performances of  models.
